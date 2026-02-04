@@ -23,7 +23,7 @@ export async function GET(request, { params }) {
               api_key: TMDB_API_KEY,
               external_source: 'imdb_id'
             },
-            timeout: 5000
+            timeout: 10000
           }
         );
 
@@ -49,7 +49,7 @@ export async function GET(request, { params }) {
                 api_key: TMDB_API_KEY,
                 include_image_language: 'en,null'
               },
-              timeout: 5000
+              timeout: 10000
             }
           );
 
@@ -96,7 +96,7 @@ export async function GET(request, { params }) {
     if (!bestLogo) {
       try {
         const imagesResponse = await axios.get(`${IMDB_API_BASE}/titles/${id}/images`, {
-          timeout: 5000,
+          timeout: 10000,
           params: { limit: 30 }
         });
 
