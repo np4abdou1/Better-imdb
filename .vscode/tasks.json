@@ -1,0 +1,14 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "add shine animation",
+			"type": "shell",
+			"command": "echo \"@keyframes shine {\n  from {\n    background-position: 0% 0%;\n  }\n  to {\n    background-position: -200% 0%;\n  }\n}\n\n.animate-shine {\n  background: linear-gradient(\n    90deg,\n    #666666 0%,\n    #ffffff 50%,\n    #666666 100%\n  );\n  background-size: 200% auto;\n  color: transparent;\n  -webkit-background-clip: text;\n  background-clip: text;\n  animation: shine 2s linear infinite;\n}\" >> app/globals.css",
+			"args": [
+				"app/globals.css"
+			],
+			"group": "css"
+		}
+	]
+}

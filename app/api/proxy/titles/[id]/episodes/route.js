@@ -1,57 +1,79 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
-
-const API_BASE = 'https://api.imdbapi.dev';
+import { API_BASE, CACHE_DURATIONS, TIMEOUTS, retryWithBackoff } from '@/lib/api-config';
 
 export async function GET(request, { params }) {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
   const season = searchParams.get('season');
-  const initialPageToken = searchParams.get('pageToken');
+  const pageToken = searchParams.get('pageToken');
+  const fetchAll = searchParams.get('fetchAll') === 'true';
 
   if (!season) {
     return NextResponse.json({ error: 'Season parameter required' }, { status: 400 });
   }
 
   try {
-    let allEpisodes = [];
-    let currentPageToken = initialPageToken || null;
-    let fetchMore = true;
-    let loops = 0;
-    const MAX_LOOPS = 50; // Fetch up to ~1000 episodes per request to avoid timeouts
+    // If fetchAll is requested, batch fetch with a reasonable limit
+    if (fetchAll) {
+      let allEpisodes = [];
+      let currentPageToken = pageToken || null;
+      let loopCount = 0;
+      const MAX_LOOPS = 10; // Limit to 10 pages max (~200 episodes) to prevent timeouts
 
-    while (fetchMore && loops < MAX_LOOPS) {
-      const params = { season };
-      if (currentPageToken) params.pageToken = currentPageToken;
+      while (loopCount < MAX_LOOPS) {
+        const queryParams = { season };
+        if (currentPageToken) queryParams.pageToken = currentPageToken;
 
-      try {
-        const response = await axios.get(`${API_BASE}/titles/${id}/episodes`, { params });
+        const response = await retryWithBackoff(() => 
+          axios.get(`${API_BASE}/titles/${id}/episodes`, {
+            params: queryParams,
+            timeout: TIMEOUTS.QUICK
+          })
+        );
+
         const data = response.data;
-
         if (data.episodes && Array.isArray(data.episodes)) {
           allEpisodes = [...allEpisodes, ...data.episodes];
         }
 
         if (data.nextPageToken) {
           currentPageToken = data.nextPageToken;
-          loops++;
+          loopCount++;
         } else {
-          currentPageToken = null; // No more pages
-          fetchMore = false;
+          break;
         }
-      } catch (innerError) {
-        console.error('Partial fetch error:', innerError.message);
-        // Stop fetching but return what we have
-        fetchMore = false;
       }
+
+      return NextResponse.json({
+        episodes: allEpisodes,
+        nextPageToken: currentPageToken, // Return remaining token if any
+        hasMore: loopCount >= MAX_LOOPS
+      }, {
+        headers: {
+          'Cache-Control': CACHE_DURATIONS.MEDIA,
+        },
+      });
     }
 
-    return NextResponse.json({ 
-      episodes: allEpisodes, 
-      nextPageToken: currentPageToken 
+    // Standard single-page fetch (default behavior)
+    const queryParams = { season };
+    if (pageToken) queryParams.pageToken = pageToken;
+
+    const response = await retryWithBackoff(() =>
+      axios.get(`${API_BASE}/titles/${id}/episodes`, {
+        params: queryParams,
+        timeout: TIMEOUTS.DEFAULT
+      })
+    );
+
+    return NextResponse.json(response.data, {
+      headers: {
+        'Cache-Control': CACHE_DURATIONS.MEDIA,
+      },
     });
   } catch (error) {
     console.error('Episode Fetch Error:', error.message);
-    return NextResponse.json({ error: 'External API Error' }, { status: 500 });
+    return NextResponse.json({ error: 'External API Error', episodes: [] }, { status: 500 });
   }
 }

@@ -1,22 +1,40 @@
-import { Inter } from "next/font/google";
+import { Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import FloatingNav from "@/components/FloatingNav";
+import "@/lib/copilot-proxy";
+import { Providers } from "@/components/Providers";
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({ 
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800", "900"],
+  display: 'swap',
+});
+
+const thinkingFont = Space_Grotesk({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-thinking",
+  display: 'swap'
+});
 
 export const metadata = {
-  title: "IMDb",
+  title: "Better IMDb",
   description: "Movies, TV and Celebrities",
+  icons: {
+    icon: '/favicon.svg',
+  },
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className={`${inter.className} bg-black text-white antialiased`}>
-        <FloatingNav />
-        <main className="min-h-screen pb-20 px-4 max-w-7xl mx-auto">
-          {children}
-        </main>
+      <body className={`${inter.className} ${thinkingFont.variable} text-white antialiased`} style={{ backgroundColor: '#181818' }}>
+        <Providers>
+          <FloatingNav />
+          <main className="min-h-screen px-20">
+            {children}
+          </main>
+        </Providers>
       </body>
     </html>
   );
