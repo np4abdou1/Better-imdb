@@ -1,0 +1,3 @@
+// lib/api-config.js (Partial update or usage check)
+// I won't modify this file yet, I'll inline constants in github-auth.js if needed or import.
+// Let's just verify if lib/api-config.js exists.

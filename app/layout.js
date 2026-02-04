@@ -1,7 +1,6 @@
 import { Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import FloatingNav from "@/components/FloatingNav";
-import "@/lib/copilot-proxy";
 import { Providers } from "@/components/Providers";
 
 const inter = Inter({ 

@@ -6,7 +6,10 @@ import { Suspense } from 'react';
 function AIHomeContent() {
   const searchParams = useSearchParams();
   const key = searchParams.get('t'); // Force remount on new chat
-  return <ChatInterface key={key} />;
+
+  return (
+    <ChatInterface key={key} />
+  );
 }
 
 export default function AIHomePage() {
@@ -16,3 +19,4 @@ export default function AIHomePage() {
     </Suspense>
   );
 }
+

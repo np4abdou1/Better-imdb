@@ -1,20 +1,21 @@
 import { NextResponse } from 'next/server';
-
-const COPILOT_API_URL = process.env.COPILOT_API_URL || 'http://localhost:4141';
+import { createChatCompletions, hasGitHubToken } from '@/lib/copilot-client';
 
 export async function GET() {
+  // If no GitHub token configured, return empty chips (no error logging)
+  if (!hasGitHubToken()) {
+    return NextResponse.json({ chips: [] }, { status: 200 });
+  }
+
   try {
     const prompt = 'Generate 4 short example user questions for a movie/TV recommendation assistant. These should be natural user questions like "Find sci-fi movies from 2020s" or "Recommend comedy shows". Keep them under 5 words each. Return ONLY a JSON array of strings.';
 
-    const response = await fetch(`${COPILOT_API_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'gpt-4.1',
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 60,
-        temperature: 0.8
-      })
+    const response = await createChatCompletions({
+      model: 'gpt-4.1',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 60,
+      temperature: 0.8,
+      stream: false
     });
 
     if (!response.ok) {

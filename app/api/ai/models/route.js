@@ -1,20 +1,47 @@
+// Get available AI models from GitHub Copilot
+
 import { NextResponse } from 'next/server';
+import { getModels } from '@/lib/copilot-client';
+import { auth } from '@/auth';
+import { getUserById } from '@/lib/db';
 
-export async function GET() {
+// Fallback models (returned when token is unavailable)
+const FALLBACK_MODELS = [
+  { id: 'gpt-4o', name: 'GPT-4o' },
+  { id: 'gpt-4.1', name: 'GPT-4.1' },
+];
+
+export async function GET(request) {
   try {
-    // Fetch available AI models from Copilot API
-    const copilotApiUrl = process.env.COPILOT_API_URL || 'http://localhost:4141';
-    const response = await fetch(`${copilotApiUrl}/v1/models`, {
-      headers: {
-        'Accept': 'application/json'
-      }
-    });
+    const session = await auth();
+    const userId = session?.user?.id;
 
-    if (!response.ok) {
-      throw new Error(`Copilot API returned ${response.status}`);
+    // Get GitHub Copilot token from DB for this user, or from cookies for guests
+    let githubToken = null;
+    if (userId) {
+      const user = getUserById(userId);
+      if (user?.copilot_token) {
+        githubToken = user.copilot_token;
+      }
     }
 
-    const data = await response.json();
+    // Fallback to cookie if no DB token
+    if (!githubToken) {
+      const cookieStore = request.cookies;
+      githubToken = cookieStore.get('github_token')?.value;
+    }
+
+    // If still no token, return fallback models
+    if (!githubToken) {
+       // Check if there is a server-side env token as last resort
+       if (process.env.GITHUB_TOKEN) {
+         githubToken = process.env.GITHUB_TOKEN;
+       } else {
+         return NextResponse.json(FALLBACK_MODELS);
+       }
+    }
+
+    const data = await getModels(githubToken);
     
     // Transform models to expected format and deduplicate by model ID
     const seenIds = new Set();
@@ -36,13 +63,7 @@ export async function GET() {
     return NextResponse.json(models);
   } catch (error) {
     console.error('Error fetching AI models:', error);
-    // Fallback to basic models if copilot-api is unavailable
-    const fallbackModels = [
-      { id: 'gpt-5-mini', name: 'GPT-5 mini' },
-      { id: 'gpt-4o', name: 'GPT-4o' },
-      { id: 'gpt-4.1', name: 'GPT-4.1' },
-      { id: 'gpt-4', name: 'GPT-4' },
-    ];
-    return NextResponse.json(fallbackModels);
+    // Fallback to basic models if Copilot is unavailable
+    return NextResponse.json(FALLBACK_MODELS);
   }
 }

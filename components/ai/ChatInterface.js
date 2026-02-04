@@ -14,8 +14,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import InlineMediaCard from '@/components/ai/InlineMediaCard';
 import AgentSummary from '@/components/ai/AgentSummary';
+import AuthPrompt from '@/components/ai/AuthPrompt';
 import clsx from 'clsx';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 
@@ -266,11 +268,30 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
   const [toolProgress, setToolProgress] = useState(null);
   const [isSearchingWeb, setIsSearchingWeb] = useState(false);
   const [expandSources, setExpandSources] = useState(false);
+  const [hasToken, setHasToken] = useState(null);
   const [sessionActivity, setSessionActivity] = useState({
     searches: [],
     toolCalls: [],
     listEdits: []
   });
+
+  // Check if GITHUB_TOKEN exists
+  useEffect(() => {
+    async function checkToken() {
+      try {
+        const response = await fetch('/api/auth/check-token');
+        if (response.ok) {
+          const data = await response.json();
+          setHasToken(data.available);
+        } else {
+          setHasToken(false);
+        }
+      } catch (error) {
+        setHasToken(false);
+      }
+    }
+    checkToken();
+  }, []);
 
   // Ref to track current chat ID in streaming context
   const chatIdRef = useRef(propChatId);
@@ -441,6 +462,10 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
     const userText = (text || '').trim();
     if (!userText || isLoading) return;
 
+    // If still checking token, wait a bit or just proceed
+    // but better to have it resolved.
+    const currentHasToken = hasToken;
+
     const userMsg = { role: 'user', content: userText, id: Date.now().toString() };
 
     setInput('');
@@ -463,6 +488,26 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
     };
 
     setMessages((prev) => [...prev, aiMsg]);
+
+    // INTERCEPT: If not authenticated, provide hardcoded response
+    if (currentHasToken === false) {
+      setTimeout(() => {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === aiMsgId
+              ? {
+                  ...msg,
+                  content: "To provide AI-powered recommendations and insights, I need you to authenticate with GitHub Copilot. This allows me to access the necessary models and tools.\n\nPlease click the **Authorize GitHub** button below to get started.",
+                  isAuthPrompt: true // Mark this as an auth prompt for special rendering
+                }
+              : msg
+          )
+        );
+        setIsLoading(false);
+        setStreamingMessageId(null);
+      }, 800);
+      return;
+    }
 
     try {
       const res = await fetch('/api/ai/chat', {
@@ -653,8 +698,9 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
                     return { ...msg, recommendations: [...existingRecs, normalized].slice(0, 8) };
                 }));
             } else if (data.type === 'error') {
+               const errorMsg = data.message || data.error || 'Unknown error';
                setMessages((prev) => prev.map((msg) =>
-                  msg.id === aiMsgId ? { ...msg, content: msg.content + '\n\n*Error: ' + data.message + '*' } : msg
+                  msg.id === aiMsgId ? { ...msg, content: (msg.content || '') + '\n\n*Error: ' + errorMsg + '*' } : msg
                ));
             }
           } catch (e) {
@@ -937,6 +983,18 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
                                     }
                                     return null;
                                   })
+                                )}
+
+                                {msg.isAuthPrompt && (
+                                  <AuthPrompt onSuccess={() => {
+                                    setHasToken(true);
+                                    // Optionally add a success message
+                                    setMessages(prev => [...prev, {
+                                      role: 'assistant',
+                                      id: Date.now().toString(),
+                                      content: "Authentication successful! I'm now ready to help you with movie and TV show recommendations."
+                                    }]);
+                                  }} />
                                 )}
                               </div>
                             </>
