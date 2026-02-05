@@ -373,6 +373,14 @@ async function processAIConversation(messages, controller, encoder, model, userI
             result = await executeTool(toolName, args, userId, options);
           }
 
+          // Check for stream_card and emit event
+          if (result && result.type === 'stream_card') {
+             controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+                type: 'stream_card',
+                data: result
+             })}\n\n`));
+          }
+
           if (toolName === 'web_search') {
             const sources = Array.isArray(result?.sources) ? result.sources : [];
             if (sources.length > 0) {

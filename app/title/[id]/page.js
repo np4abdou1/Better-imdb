@@ -2,8 +2,8 @@
 import { useState, useEffect, use, useRef } from 'react';
 import { getTitleDetails, getTitleEpisodes, saveRating, getRating, getLists, addListItem, getTitleCredits, getTitleImages, getTitleAwards, getTitleBoxOffice, getTitleLogo } from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Star, Clock, Calendar, ArrowLeft, Play, Plus, Check, MagnifyingGlass, CaretDown, Monitor, FilmReel, UserCircle, Trophy, CurrencyDollar } from '@phosphor-icons/react';
-import { ChevronDown } from 'lucide-react';
+import { Star, Clock, Calendar, ArrowLeft, Play, Plus, Check, MagnifyingGlass, CaretDown, Monitor, FilmReel, UserCircle, Trophy, CurrencyDollar, PlayCircle } from '@phosphor-icons/react';
+import { ChevronDown, Film } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
 import clsx from 'clsx';
@@ -16,6 +16,7 @@ export default function TitleDetails({ params }) {
   const [title, setTitle] = useState(null);
   const [episodes, setEpisodes] = useState([]);
   const [nextPageToken, setNextPageToken] = useState(null);
+  
   const [season, setSeason] = useState(1);
   const [loading, setLoading] = useState(true);
   const [episodesLoading, setEpisodesLoading] = useState(false);
@@ -382,6 +383,16 @@ export default function TitleDetails({ params }) {
                 </div>
 
                 <div className="flex flex-wrap gap-2 border-b border-white/5 pb-6">
+                  {title.type === 'movie' && (
+                    <Link
+                      href={`/watch/${id}`}
+                      className="flex items-center gap-2 px-6 py-2 rounded-lg bg-white text-black font-bold text-sm hover:bg-zinc-200 transition-colors shadow-lg shadow-white/10"
+                    >
+                      <Play size={16} weight="fill" />
+                      <span>Watch Now</span>
+                    </Link>
+                  )}
+                  
                   {[
                     { label: 'To Watch', icon: Plus, name: 'To Watch' },
                     { label: 'Watching', icon: Monitor, name: 'Watching' },
@@ -732,7 +743,17 @@ export default function TitleDetails({ params }) {
                           whileHover={{ y: -5, scale: 1.02 }}
                           className="group relative rounded-xl overflow-hidden bg-black/40 backdrop-blur-sm border border-white/10 hover:border-white/30 transition-all duration-300 scroll-mt-20"
                         >
-                          <div className="relative aspect-video w-full overflow-hidden bg-zinc-900">
+                          <div className="relative aspect-video w-full overflow-hidden bg-zinc-900 group-hover:ring-1 ring-white/20 transition-all">
+                            {/* Play Overlay */}
+                            <Link 
+                              href={`/watch/${id}?season=${season}&episode=${ep.episodeNumber}`}
+                              className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 cursor-pointer backdrop-blur-[2px]"
+                            >
+                              <div className="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center text-black shadow-lg scale-90 group-hover:scale-100 transition-transform duration-300">
+                                <Play size={24} weight="fill" className="ml-0.5" />
+                              </div>
+                            </Link>
+
                             {ep.primaryImage?.url ? (
                               <Image
                                 src={ep.primaryImage.url}

@@ -9,8 +9,8 @@ export default function FloatingNav() {
   const pathname = usePathname();
   const { data: session } = useSession();
 
-  // Hide on AI pages and login
-  if (pathname === '/ai' || pathname.startsWith('/ai/') || pathname === '/login') return null;
+  // Hide on AI pages, login, and watch
+  if (pathname === '/ai' || pathname.startsWith('/ai/') || pathname === '/login' || pathname.startsWith('/watch/')) return null;
 
   // Use the same bottom floating nav for all pages including AI
   return (

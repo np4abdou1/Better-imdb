@@ -13,6 +13,8 @@ import { Home, TrendingUp, Award, Users, Wand2, Sparkles, User, Share2, RotateCc
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import InlineMediaCard from '@/components/ai/InlineMediaCard';
+import InlineStreamCard from '@/components/ai/InlineStreamCard';
+import StreamPlayer from '@/components/StreamPlayer';
 import AgentSummary from '@/components/ai/AgentSummary';
 import AuthPrompt from '@/components/ai/AuthPrompt';
 import clsx from 'clsx';
@@ -269,6 +271,7 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
   const [isSearchingWeb, setIsSearchingWeb] = useState(false);
   const [expandSources, setExpandSources] = useState(false);
   const [hasToken, setHasToken] = useState(null);
+  const [activeStream, setActiveStream] = useState(null);
   const [sessionActivity, setSessionActivity] = useState({
     searches: [],
     toolCalls: [],
@@ -578,6 +581,11 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
               setMessages((prev) => prev.map((msg) =>
                 msg.id === aiMsgId ? { ...msg, content: (msg.content || '') + cleanedContent } : msg
               ));
+            } else if (data.type === 'stream_card') {
+                setMessages((prev) => prev.map((msg) => {
+                    if (msg.id !== aiMsgId) return msg;
+                    return { ...msg, streamCard: data.data };
+                }));
             } else if (data.type === 'media_grid') {
               const titles = (data.titles || []).map(normalizeTitle).filter(t => t?.id);
               setMessages((prev) => prev.map((msg) => {
@@ -858,6 +866,22 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
                           return (
                             <>
                               {thinking && isFinished && <ThinkingExpandable content={thinking} isFinished={isFinished} />}
+
+                              {/* Stream Card */}
+                              {msg.streamCard && (
+                                <div className="mb-6">
+                                   <InlineStreamCard
+                                      data={msg.streamCard}
+                                      onPlay={(data) => setActiveStream({
+                                        imdbId: data.imdb_id,
+                                        season: data.season,
+                                        episode: data.episode,
+                                        type: data.media_type,
+                                        title: data.title
+                                      })}
+                                   />
+                                </div>
+                              )}
 
                               {/* Favicon-only sources (top of response) - enhanced stack UI */}
                               {msg.sources && msg.sources.length > 0 && (
@@ -1253,6 +1277,16 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
             </div>
           </div>
         </motion.div>
+
+        {/* Stream Player Overlay */}
+        <AnimatePresence>
+          {activeStream && (
+             <StreamPlayer
+                {...activeStream}
+                onClose={() => setActiveStream(null)}
+             />
+          )}
+        </AnimatePresence>
       </div>    
   );
 }

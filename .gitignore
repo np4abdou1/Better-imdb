@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/cenima/node/node_modules
 
 # next.js
 /.next/
