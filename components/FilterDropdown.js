@@ -1,7 +1,8 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
-import { CaretDown, X } from '@phosphor-icons/react';
+import { ChevronDown, X, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import clsx from 'clsx';
 
 export default function FilterDropdown({ label, options, value, onChange, multiple = false }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -49,29 +50,33 @@ export default function FilterDropdown({ label, options, value, onChange, multip
   const hasValue = multiple ? value?.length > 0 : value;
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative w-full font-thinking" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`
-          flex items-center justify-between gap-1.5 px-3 py-1.5 rounded-lg
-          bg-zinc-900/50 border transition-all
-          ${hasValue ? 'border-white/20 text-white' : 'border-white/10 text-zinc-400'}
-          hover:border-white/30 hover:bg-zinc-900/70
-          text-xs font-medium min-w-[100px]
-        `}
+        className={clsx(
+          "w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border transition-all duration-200",
+          hasValue 
+            ? "bg-white text-black border-white shadow-lg shadow-white/10" 
+            : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+        )}
       >
-        <span className="truncate">{displayValue()}</span>
-        <div className="flex items-center gap-0.5">
+        <span className="truncate text-sm font-semibold">{displayValue()}</span>
+        <div className="flex items-center gap-2">
           {hasValue && (
-            <X 
-              size={12} 
+            <div 
               onClick={clearSelection}
-              className="hover:text-white"
-            />
+              className={clsx(
+                "p-0.5 rounded-full transition-colors",
+                hasValue ? "hover:bg-black/10" : "hover:bg-white/10"
+              )}
+            >
+              <X size={14} strokeWidth={2.5} />
+            </div>
           )}
-          <ChevronDown 
-            size={14} 
-            className={`transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          <ChevronDown
+            size={16}
+            className={clsx("transition-transform duration-300", isOpen && 'rotate-180')}
+            strokeWidth={2.5}
           />
         </div>
       </button>
@@ -79,13 +84,13 @@ export default function FilterDropdown({ label, options, value, onChange, multip
       <AnimatePresence>
         {isOpen && (
           <motion.div
-            initial={{ opacity: 0, y: -5 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -5 }}
-            transition={{ duration: 0.15 }}
-            className="absolute z-50 mt-1 w-full min-w-[160px] bg-zinc-900 border border-white/10 rounded-lg shadow-2xl overflow-hidden"
+            initial={{ opacity: 0, y: 8, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.95 }}
+            transition={{ type: "spring", bounce: 0, duration: 0.2 }}
+            className="absolute z-50 mt-2 w-full min-w-[220px] bg-[#0E0E0E] border border-zinc-800 rounded-xl shadow-2xl overflow-hidden ring-1 ring-white/5"
           >
-            <div className="max-h-[280px] overflow-y-auto">
+            <div className="max-h-[320px] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
               {options.map((option) => {
                 const isSelected = multiple 
                   ? (value || []).includes(option.value)
@@ -95,15 +100,23 @@ export default function FilterDropdown({ label, options, value, onChange, multip
                   <button
                     key={option.value}
                     onClick={() => handleSelect(option.value)}
-                    className={`
-                      w-full px-3 py-1.5 text-left text-xs transition-colors
-                      ${isSelected 
-                        ? 'bg-white/10 text-white font-medium' 
-                        : 'text-zinc-400 hover:bg-white/5 hover:text-white'
-                      }
-                    `}
+                    className={clsx(
+                      "w-full px-4 py-3 text-left text-sm font-medium transition-all flex items-center justify-between group",
+                      isSelected 
+                        ? "bg-white/10 text-white" 
+                        : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
+                    )}
                   >
-                    {option.label}
+                    <span>{option.label}</span>
+                    {isSelected && (
+                      <motion.div
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        className="text-white"
+                      >
+                        <Check size={14} strokeWidth={3} />
+                      </motion.div>
+                    )}
                   </button>
                 );
               })}

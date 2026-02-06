@@ -91,7 +91,7 @@ export default function People() {
   }, [visibleCount, allPeople, isLoadingMore, hasMore, nextPageToken]);
 
   return (
-    <div className="pt-8 min-h-screen pb-24 max-w-[1600px] mx-auto">
+    <div className="pt-2 min-h-screen pb-24 max-w-[1600px] mx-auto px-6">
       {loading && people.length === 0 ? (
         <div className="flex justify-center py-12">
           <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>

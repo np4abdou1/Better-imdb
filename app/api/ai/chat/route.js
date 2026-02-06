@@ -92,7 +92,15 @@ export async function POST(request) {
     // Build compact taste profile (RAG-lite approach)
     const tasteProfile = await generateTasteProfile(userId);
     const now = new Date();
-    const currentDateContext = `Current date (system): ${now.toISOString()} (${now.toUTCString()})`;
+    const currentDateContext = `Current date: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} (${now.toISOString().split('T')[0]})
+ISO: ${now.toISOString()}
+Year: ${now.getFullYear()}
+
+Use this information to:
+- Distinguish between released and upcoming content
+- Understand recency when users ask about "recent", "latest", or "new" releases
+- Provide accurate context for "this year", "last year", relative dates, etc.
+- Know what content is currently in theaters, recently released, or upcoming`;
 
     // Prepare messages for the API
     const messages = [

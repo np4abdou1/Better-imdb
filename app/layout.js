@@ -27,10 +27,10 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className={`${inter.className} ${thinkingFont.variable} text-white antialiased`} style={{ backgroundColor: '#181818' }}>
+      <body className={`${inter.className} ${thinkingFont.variable} text-white antialiased`}>
         <Providers>
           <FloatingNav />
-          <main className="min-h-screen px-20">
+          <main className="min-h-screen px-20 pt-0">
             {children}
           </main>
         </Providers>

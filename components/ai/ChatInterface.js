@@ -351,19 +351,53 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
   // Load AI suggestion chips
   useEffect(() => {
     let isMounted = true;
-    setChipsLoading(true);
 
+    // Default fallback chips - set immediately for first render
+    const defaultChips = [
+      "Find trending movies",
+      "Recommend sci-fi shows",
+      "Top rated anime",
+      "Oscar winners 2024"
+    ];
+    
+    // Set default chips immediately to fix first-load rendering
+    setChips(defaultChips);
+    setChipsLoading(false);
+
+    // Try to load from localStorage first
+    const cachedChips = typeof window !== 'undefined'
+      ? localStorage.getItem('ai_chips')
+      : null;
+
+    if (cachedChips) {
+      try {
+        const parsed = JSON.parse(cachedChips);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setChips(parsed);
+          setChipsLoading(false);
+        }
+      } catch (e) {
+        console.error('Failed to parse cached chips:', e);
+      }
+    }
+
+    // Fetch fresh chips from API
     fetch('/api/ai/chips')
       .then((res) => (res.ok ? res.json() : { chips: [] }))
       .then((data) => {
         if (!isMounted) return;
-        const list = Array.isArray(data?.chips) ? data.chips : [];
+        const list = Array.isArray(data?.chips) && data.chips.length > 0 ? data.chips : defaultChips;
         setChips(list);
         setChipsLoading(false);
+
+        // Cache for future loads
+        if (typeof window !== 'undefined' && list.length > 0) {
+          localStorage.setItem('ai_chips', JSON.stringify(list));
+        }
       })
       .catch(() => {
         if (!isMounted) return;
-        setChips([]);
+        setChips(defaultChips);
         setChipsLoading(false);
       });
 
@@ -1199,7 +1233,7 @@ export default function ChatInterface({ initialMessages = DEFAULT_MESSAGES, chat
                                           animate={{ opacity: 1, y: 0, scale: 1 }}
                                           exit={{ opacity: 0, y: 10, scale: 0.95 }}
                                           transition={{ duration: 0.15 }}
-                                          className="absolute bottom-full left-0 min-w-[200px] bg-zinc-900 border border-zinc-700 rounded-xl overflow-hidden shadow-2xl z-[80] max-h-[600px] overflow-y-auto"
+                                          className="absolute bottom-full left-0 min-w-[200px] bg-zinc-900 border border-zinc-700 rounded-xl overflow-hidden shadow-2xl z-[80] max-h-[300px] overflow-y-auto"
                                           style={{ marginBottom: '16px' }}
                                         >
                                           <div className="uppercase font-bold text-zinc-500 tracking-wider px-3 py-2 text-[10px]">Select Model</div>

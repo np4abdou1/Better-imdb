@@ -174,9 +174,9 @@ function InlineMediaCard({ id, title, year, reason, index = 0 }) {
       <Link
         href={`/title/${data.id}`}
         className={clsx(
-            "group block relative rounded-xl overflow-hidden aspect-[2/3] bg-zinc-900/50 border border-white/10 transition-all duration-300 shadow-lg h-full w-full",
+            "group block relative rounded-xl overflow-hidden aspect-[2/3] bg-zinc-900/50 border border-white/10 transition-all duration-150 shadow-lg h-full w-full",
             // If menu is open, force hover styles
-            showListMenu ? "border-white ring-2 ring-white scale-[1.02] shadow-2xl z-30" : "hover:border-white hover:ring-2 hover:ring-white hover:scale-[1.02] hover:shadow-2xl"
+            showListMenu ? "border-white ring-2 ring-white shadow-2xl z-30" : "hover:border-white hover:ring-2 hover:ring-white hover:shadow-2xl"
         )}
       >
         {data.primaryImage ? (
@@ -186,7 +186,7 @@ function InlineMediaCard({ id, title, year, reason, index = 0 }) {
             alt={data.primaryTitle}
             fill
             sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, (max-width: 1600px) 25vw, 320px"
-            className="object-cover grayscale-[10%] group-hover:grayscale-0 transition-all duration-500"
+            className="object-cover grayscale-[10%] group-hover:grayscale-0 group-hover:scale-105 transition-all duration-500"
             priority={false}
             loading="lazy"
             placeholder="blur"
@@ -290,8 +290,8 @@ function InlineMediaCard({ id, title, year, reason, index = 0 }) {
             {data.startYear && <span>{data.startYear}</span>}
             {data.rating?.aggregateRating && typeof data.rating.aggregateRating === 'number' && !isNaN(data.rating.aggregateRating) && (
               <div className="flex items-center gap-1 text-white">
-                <Star size={12} fill="currentColor" className="text-white" />
-                <span className="font-semibold text-white">{data.rating.aggregateRating.toFixed(1)}</span>
+                <span className="font-semibold">{data.rating.aggregateRating.toFixed(1)}</span>
+                <Star size={12} fill="currentColor" />
               </div>
             )}
             {data.type && (

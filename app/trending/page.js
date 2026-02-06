@@ -69,7 +69,7 @@ export default function Trending() {
   ];
 
   return (
-    <div className="pt-8 min-h-screen max-w-[1600px] mx-auto">
+    <div className="pt-2 min-h-screen max-w-[1600px] mx-auto px-6">
       <div className="text-center mb-8 flex flex-col items-center gap-4">
         <div>
           <h1 className="text-4xl font-black text-white mb-2">Trending Now</h1>

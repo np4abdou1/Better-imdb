@@ -14,7 +14,7 @@ function AIHomeContent() {
 
 export default function AIHomePage() {
   return (
-    <Suspense fallback={<div className="flex-1 bg-[#181818]" />}>
+    <Suspense fallback={<div className="flex-1" style={{ backgroundColor: 'var(--background)' }} />}>
       <AIHomeContent />
     </Suspense>
   );

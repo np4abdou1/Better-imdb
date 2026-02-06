@@ -219,7 +219,8 @@ export default function ChatSidebar({ chats: initialChats }) {
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.95, y: -4 }}
                             transition={{ duration: 0.1 }}
-                            className="absolute right-0 top-full mt-1 w-32 bg-[#181818] border border-zinc-800 rounded-lg overflow-hidden shadow-2xl z-[60]"
+                            className="absolute right-0 top-full mt-1 w-32 border border-zinc-800 rounded-lg overflow-hidden shadow-2xl z-[60]"
+                            style={{ backgroundColor: 'var(--background)' }}
                           >
                             <button
                               onClick={() => handleDeleteChat(chat.id)}

@@ -56,7 +56,7 @@ export async function GET(request) {
           })
           .map(model => ({
             id: model.id,
-            name: model.display_name || model.id
+            name: model.display_name || model.id.replace(/^gpt/i, 'GPT').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
           }))
       : [];
 

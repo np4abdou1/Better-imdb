@@ -57,7 +57,7 @@ export default function Profile() {
   if (!session) return null;
 
   return (
-    <div className="min-h-screen pt-24 pb-32">
+    <div className="min-h-screen pt-4 pb-32">
       <div className="max-w-6xl mx-auto">
         
         {/* Header */}

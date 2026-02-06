@@ -1,7 +1,7 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Play, WarningCircle, Spinner } from '@phosphor-icons/react';
+import { X, WarningCircle } from '@phosphor-icons/react';
 
 export default function StreamPlayer({ imdbId, season = 1, episode = 1, type = 'movie', title, onClose }) {
   const [loading, setLoading] = useState(true);
@@ -56,30 +56,33 @@ export default function StreamPlayer({ imdbId, season = 1, episode = 1, type = '
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between mb-4 px-4 md:px-0">
-          <div className="flex flex-col">
-            <h3 className="text-white font-bold text-lg md:text-xl line-clamp-1">
-              {title}
-            </h3>
-            {type !== 'movie' && (
-                <span className="text-zinc-400 text-sm">S{season}:E{episode}</span>
-            )}
+        <div className="mb-4 px-4 md:px-0">
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/50 px-4 py-3 backdrop-blur-xl">
+            <div className="flex flex-col">
+              <span className="text-[10px] uppercase tracking-[0.35em] text-white/50">Now Playing</span>
+              <h3 className="text-white font-medium text-lg md:text-xl line-clamp-1">
+                {title}
+              </h3>
+              {type !== 'movie' && (
+                  <span className="text-zinc-400 text-xs uppercase tracking-[0.3em]">Season {season} · Episode {episode}</span>
+              )}
+            </div>
+            <button 
+              onClick={onClose}
+              className="p-2 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition-colors text-white"
+            >
+              <X size={20} />
+            </button>
           </div>
-          <button 
-            onClick={onClose}
-            className="p-2 rounded-full hover:bg-white/10 transition-colors text-white"
-          >
-            <X size={24} />
-          </button>
         </div>
 
         {/* Player Container */}
-        <div className="relative flex-1 bg-black rounded-xl overflow-hidden border border-white/10 shadow-2xl">
+        <div className="relative flex-1 bg-black rounded-2xl overflow-hidden border border-white/10 shadow-[0_25px_70px_rgba(0,0,0,0.7)]">
           
           {loading && !error && (
             <div className="absolute inset-0 flex flex-col items-center justify-center z-10 text-white gap-3">
-              <div className="w-10 h-10 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-              <p className="text-sm font-medium animate-pulse text-zinc-400">Resolving Stream...</p>
+              <div className="w-9 h-9 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+              <p className="text-[11px] uppercase tracking-[0.35em] text-white/60">Resolving Stream</p>
             </div>
           )}
 

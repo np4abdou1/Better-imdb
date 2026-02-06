@@ -1,19 +1,21 @@
 'use client';
-import { useState, useEffect, useRef, use } from 'react';
+import { useState, useEffect, useRef, use, useMemo, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { getTitleDetails } from '@/lib/api';
+import { getTitleDetails, getTitleEpisodes } from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  Volume2, VolumeX, Maximize, Minimize, 
-  ArrowLeft, RotateCcw, RotateCw, Settings, AlertCircle, PictureInPicture
+  Play, Pause, Volume2, VolumeX, Volume1, Maximize, Minimize, 
+  ArrowLeft, RotateCcw, RotateCw, 
+  Loader2, ListVideo, X, ChevronRight
 } from 'lucide-react';
 
 const STREAM_API = '/api/stream/watch';
 const RESOLVE_API = '/api/stream/resolve';
 
-// Helper to format time
+// --- HELPERS ---
+
 const formatTime = (seconds) => {
-  if (!seconds) return '0:00';
+  if (!seconds || isNaN(seconds)) return '0:00';
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
@@ -21,56 +23,86 @@ const formatTime = (seconds) => {
   return `${m}:${s < 10 ? '0' + s : s}`;
 };
 
-const PlayGlyph = ({ className }) => (
-  <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
-    <polygon points="7,4 20,12 7,20" fill="currentColor" />
-  </svg>
-);
-
-const PauseGlyph = ({ className }) => (
-  <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
-    <rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" />
-    <rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" />
-  </svg>
-);
+// Clean raw backend logs into minimal user-facing text
+const sanitizeLog = (raw) => {
+  if (!raw) return 'Preparing playback';
+  const s = raw.replace(/\[.*?\]\s*/g, '').trim();
+  const lower = s.toLowerCase();
+  if (lower.includes('resolving')) return 'Locating source';
+  if (lower.includes('no mapping') || lower.includes('checking')) return 'Checking availability';
+  if (lower.includes('searching') || lower.includes('scanning')) return 'Searching providers';
+  if (lower.includes('retry')) return 'Retrying connection';
+  if (lower.includes('found') && lower.includes('results')) return 'Matching results';
+  if (lower.includes('no results')) return 'Expanding search';
+  if (lower.includes('fetching details') || lower.includes('validating')) return 'Validating source';
+  if (lower.includes('rejecting') || lower.includes('filtering')) return 'Selecting best source';
+  if (lower.includes('cached') || lower.includes('using cached')) return 'Loading cached source';
+  if (lower.includes('ready') || lower.includes('play')) return 'Starting playback';
+  if (lower.includes('resolving stream')) return 'Extracting stream';
+  if (lower.includes('http') || lower.includes('url') || lower.includes('www')) return 'Connecting to provider';
+  if (lower.includes('season') || lower.includes('episode')) return 'Locating episode';
+  if (lower.includes('match')) return 'Verifying match';
+  if (lower.includes('fail') || lower.includes('error')) return 'Retrying';
+  // Fallback: return first 40 chars cleaned
+  const clean = s.charAt(0).toUpperCase() + s.slice(1);
+  return clean.length > 40 ? clean.slice(0, 40) : clean;
+};
 
 export default function WatchPage({ params }) {
   const { id } = use(params);
   const searchParams = useSearchParams();
   const router = useRouter();
   
-  // Params
   const season = searchParams.get('season') || 1;
   const episode = searchParams.get('episode') || 1;
   
-  // State
+  // Data
   const [title, setTitle] = useState(null);
   const [loadingTitle, setLoadingTitle] = useState(true);
-  const [streamUrl, setStreamUrl] = useState(null);
-  const [videoError, setVideoError] = useState(null);
-  const [videoLoading, setVideoLoading] = useState(true); // Buffering
-  const [resolving, setResolving] = useState(true);
-  const [resolveLogs, setResolveLogs] = useState([]);
-  const [resolveError, setResolveError] = useState(null);
+  const [episodeTitle, setEpisodeTitle] = useState('');
   
-  // Player State
+  // Episodes Panel
+  const [showEpisodes, setShowEpisodes] = useState(false);
+  const [episodes, setEpisodes] = useState([]);
+  const [loadingEpisodes, setLoadingEpisodes] = useState(false);
+  
+  // Stream
+  const [streamUrl, setStreamUrl] = useState(null);
+  const [resolving, setResolving] = useState(true);
+  const [lastLog, setLastLog] = useState('');
+  const [error, setError] = useState(null);
+  
+  // Player
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const timelineRef = useRef(null);
+
+  
+  
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [buffered, setBuffered] = useState(0);
+  const [waiting, setWaiting] = useState(false);
+  const [playbackFeedback, setPlaybackFeedback] = useState(null);
+  const [isPaused, setIsPaused] = useState(false); // For monochrome effect
+  
   const [fullscreen, setFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const controlsTimeoutRef = useRef(null);
+  const feedbackTimeoutRef = useRef(null);
+  
+  // Timeline Hover
   const [hoverTime, setHoverTime] = useState(null);
   const [hoverPos, setHoverPos] = useState(0);
-  const [isPiP, setIsPiP] = useState(false);
-  const controlsTimeoutRef = useRef(null);
 
-  // Fetch Title Details
+  // Volume slider state for proper drag handling
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+  const volumeTimeoutRef = useRef(null);
+
+  // --- INIT ---
+
   useEffect(() => {
     const fetchInfo = async () => {
       try {
@@ -78,565 +110,556 @@ export default function WatchPage({ params }) {
         if (!data) throw new Error('Title not found');
         setTitle(data);
       } catch (err) {
-        setVideoError(err.message || 'Failed to load title');
+        setError(err.message || 'Failed to load title');
       } finally {
         setLoadingTitle(false);
       }
     };
     fetchInfo();
-  }, [id, season, episode]);
+  }, [id]);
 
+  // Fetch episode title
   useEffect(() => {
-    if (loadingTitle || videoError) return;
-    setResolving(true);
-    setResolveError(null);
-    setResolveLogs([]);
-    setStreamUrl(null);
-
-    const source = new EventSource(`${RESOLVE_API}/${id}?season=${season}&episode=${episode}`);
-
-    source.onmessage = (event) => {
-      if (event.data === '[DONE]') {
-        source.close();
-        return;
+    if (!title || title.type === 'movie') return;
+    const fetchEpTitle = async () => {
+      try {
+        const data = await getTitleEpisodes(id, season);
+        const eps = data?.episodes || [];
+        const ep = eps.find(e => String(e.episodeNumber) === String(episode));
+        if (ep?.primaryTitle) setEpisodeTitle(ep.primaryTitle);
+      } catch (err) {
+        console.warn('Could not fetch episode title:', err);
       }
+    };
+    fetchEpTitle();
+  }, [id, season, episode, title]);
+
+  // SSE Stream resolve
+  useEffect(() => {
+    if (loadingTitle || error) return;
+    setResolving(true);
+    setStreamUrl(null);
+    setLastLog('Preparing playback');
+    
+    const source = new EventSource(`${RESOLVE_API}/${id}?season=${season}&episode=${episode}`);
+    source.onmessage = (event) => {
+      if (event.data === '[DONE]') { source.close(); return; }
       try {
         const payload = JSON.parse(event.data);
-        if (payload.type === 'log') {
-          setResolveLogs((prev) => {
-            const next = [...prev, payload.message].slice(-8);
-            return next;
-          });
-        }
+        if (payload.type === 'log') setLastLog(payload.message);
         if (payload.type === 'resolved') {
           setResolving(false);
           setStreamUrl(`${STREAM_API}/${id}?season=${season}&episode=${episode}`);
-          setResolveLogs((prev) => [...prev, '[StreamService] Ready to play']
-            .slice(-8));
           source.close();
         }
         if (payload.type === 'error') {
           setResolving(false);
-          setResolveError(payload.message || 'Stream resolve failed');
-          setVideoError(payload.message || 'Stream resolve failed');
+          setError(payload.message || 'Stream unavailable');
           source.close();
         }
-      } catch (err) {
-        setResolving(false);
-        setResolveError('Failed to parse resolve stream');
-        setVideoError('Failed to parse resolve stream');
-        source.close();
-      }
+      } catch (err) { console.error('SSE parse error:', err); }
     };
-
-    source.onerror = () => {
-      setResolving(false);
-      setResolveError('Resolve connection failed');
-      setVideoError('Resolve connection failed');
-      source.close();
-    };
-
+    source.onerror = () => source.close();
     return () => source.close();
-  }, [id, season, episode, loadingTitle, videoError]);
+  }, [id, season, episode, loadingTitle]);
 
-  // Request Fullscreen on first interaction if possible, or just be full window
-  useEffect(() => {
-    // Ensuring the body doesn't scroll
-    document.body.style.overflow = 'hidden';
-    return () => {
-        document.body.style.overflow = 'auto';
-    };
-  }, []);
+  // Fetch episodes for panel
+  const openEpisodesPanel = useCallback(async () => {
+    if (showEpisodes) { setShowEpisodes(false); return; }
+    setShowEpisodes(true);
+    if (episodes.length > 0) return;
+    setLoadingEpisodes(true);
+    try {
+      const data = await getTitleEpisodes(id, season);
+      setEpisodes(data?.episodes || []);
+    } catch (err) {
+      console.warn('Failed to load episodes:', err);
+    } finally {
+      setLoadingEpisodes(false);
+    }
+  }, [showEpisodes, episodes.length, id, season]);
 
-  // Idle Controls Hider
-  const handleMouseMove = () => {
+  // --- CONTROLS ---
+
+  const triggerPlaybackFeedback = (type) => {
+    setPlaybackFeedback(type);
+    if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+    feedbackTimeoutRef.current = setTimeout(() => setPlaybackFeedback(null), 400);
+  };
+
+  const handleMouseMove = useCallback(() => {
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
-    controlsTimeoutRef.current = setTimeout(() => {
-      if (playing) setShowControls(false);
-    }, 2500);
-  };
-  useEffect(() => {
-    return () => {
-      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setFullscreen(Boolean(document.fullscreenElement));
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
-  useEffect(() => {
-    try {
-      const storedVolume = localStorage.getItem('watcharr-volume');
-      const storedMuted = localStorage.getItem('watcharr-muted');
-      if (storedVolume !== null) {
-        const parsed = Math.max(0, Math.min(1, parseFloat(storedVolume)));
-        if (!Number.isNaN(parsed)) setVolume(parsed);
-      }
-      if (storedMuted !== null) setMuted(storedMuted === 'true');
-    } catch (err) {
-      console.warn('Failed to load volume settings:', err);
+    if (playing) {
+      controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 2500);
     }
-  }, []);
+  }, [playing]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('watcharr-volume', String(volume));
-      localStorage.setItem('watcharr-muted', String(muted));
-    } catch (err) {
-      console.warn('Failed to persist volume settings:', err);
+    if (playing) {
+      controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 2500);
+    } else {
+      setShowControls(true);
     }
-  }, [volume, muted]);
+    return () => clearTimeout(controlsTimeoutRef.current);
+  }, [playing]);
 
-  useEffect(() => {
-    if (!videoRef.current) return;
-    videoRef.current.volume = volume;
-    videoRef.current.muted = muted;
-  }, [volume, muted]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const handleEnter = () => setIsPiP(true);
-    const handleLeave = () => setIsPiP(false);
-    video.addEventListener('enterpictureinpicture', handleEnter);
-    video.addEventListener('leavepictureinpicture', handleLeave);
-    return () => {
-      video.removeEventListener('enterpictureinpicture', handleEnter);
-      video.removeEventListener('leavepictureinpicture', handleLeave);
-    };
-  }, [streamUrl]);
-
-  // Video Handlers
-  const togglePlay = (e) => {
+  const togglePlay = useCallback((e) => {
     if (e) e.stopPropagation();
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
       video.play().catch(() => {});
+      setPlaying(true);
+      setIsPaused(false);
+      triggerPlaybackFeedback('play');
     } else {
       video.pause();
+      setPlaying(false);
+      setIsPaused(true);
+      triggerPlaybackFeedback('pause');
     }
-  };
+  }, []);
 
-  const toggleMute = (e) => {
-    if(e) e.stopPropagation();
-    if (videoRef.current) {
-      videoRef.current.muted = !muted;
-      setMuted(!muted);
-    }
-  };
+  const seekRelative = useCallback((seconds) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = Math.min(Math.max(video.currentTime + seconds, 0), duration);
+    setCurrentTime(video.currentTime);
+    handleMouseMove();
+  }, [duration, handleMouseMove]);
 
-  const handleVolumeChange = (e) => {
+  const toggleFullscreen = useCallback(async () => {
+    if (!containerRef.current) return;
+    try {
+      if (!document.fullscreenElement) {
+        await containerRef.current.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch(e) { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    const h = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', h);
+    return () => document.removeEventListener('fullscreenchange', h);
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const next = !muted;
+    video.muted = next;
+    setMuted(next);
+    if (next) setVolume(0);
+    else { setVolume(1); video.volume = 1; }
+  }, [muted]);
+  
+  const handleVolumeChange = useCallback((e) => {
     e.stopPropagation();
     const val = parseFloat(e.target.value);
     setVolume(val);
     if (videoRef.current) {
       videoRef.current.volume = val;
+      videoRef.current.muted = val === 0;
       setMuted(val === 0);
     }
-  };
+  }, []);
 
-  const handleSeek = (e) => {
+  const handleSeekClick = useCallback((e) => {
     e.stopPropagation();
     if (!timelineRef.current || !duration) return;
     const rect = timelineRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const pct = Math.max(0, Math.min(1, x / rect.width));
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const seekTo = pct * duration;
+    if (videoRef.current) videoRef.current.currentTime = seekTo;
     setCurrentTime(seekTo);
-    if(videoRef.current) videoRef.current.currentTime = seekTo;
-  };
+  }, [duration]);
 
-  const handleTimelineHover = (e) => {
-      if (!timelineRef.current || !duration) return;
-      const rect = timelineRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const pct = Math.max(0, Math.min(1, x / rect.width));
-      setHoverTime(pct * duration);
-      setHoverPos(pct * 100);
-  };
+  const handleTimelineHover = useCallback((e) => {
+    if (!timelineRef.current || !duration) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const time = pct * duration;
 
-  const toggleFullscreen = async (e) => {
-    if(e) e.stopPropagation();
-    try {
-        if (!document.fullscreenElement) {
-            await containerRef.current?.requestFullscreen();
-            setFullscreen(true);
-        } else {
-            await document.exitFullscreen();
-            setFullscreen(false);
-        }
-    } catch (e) {
-        console.error('Fullscreen error:', e);
-    }
-  };
+    setHoverTime(time);
+    setHoverPos(pct * 100);
+  }, [duration]);
 
-  const togglePiP = async (e) => {
-    if (e) e.stopPropagation();
-    const video = videoRef.current;
-    if (!video) return;
-    try {
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture();
-      } else if (document.pictureInPictureEnabled) {
-        await video.requestPictureInPicture();
-      }
-    } catch (err) {
-      console.error('PiP error:', err);
-    }
-  };
+  const handleTimelineLeave = useCallback(() => {
+    setHoverTime(null);
+  }, []);
 
-  // Keyboard Shortcuts
+  // Volume hover handlers
+  const handleVolumeEnter = useCallback(() => {
+    if (volumeTimeoutRef.current) clearTimeout(volumeTimeoutRef.current);
+    setShowVolumeSlider(true);
+  }, []);
+
+  const handleVolumeLeave = useCallback(() => {
+    volumeTimeoutRef.current = setTimeout(() => setShowVolumeSlider(false), 300);
+  }, []);
+
+  // Keyboard
   useEffect(() => {
     const handleKey = (e) => {
-      if (e.target.tagName === 'INPUT') return;
-
+      if (document.activeElement.tagName === 'INPUT') return;
       switch(e.code) {
-        case 'Space':
-        case 'KeyK':
-          e.preventDefault();
-          togglePlay();
+        case 'Space': case 'KeyK': e.preventDefault(); togglePlay(); break;
+        case 'ArrowLeft': case 'KeyJ': e.preventDefault(); seekRelative(-10); break;
+        case 'ArrowRight': case 'KeyL': e.preventDefault(); seekRelative(10); break;
+        case 'ArrowUp': 
+          e.preventDefault(); 
+          setVolume(v => { const n = Math.min(v + 0.1, 1); if(videoRef.current) videoRef.current.volume = n; return n; }); 
           break;
-        case 'ArrowRight':
-        case 'KeyL':
-          if (videoRef.current) videoRef.current.currentTime = Math.min(videoRef.current.currentTime + 10, duration);
-          handleMouseMove();
+        case 'ArrowDown': 
+          e.preventDefault(); 
+          setVolume(v => { const n = Math.max(v - 0.1, 0); if(videoRef.current) videoRef.current.volume = n; return n; }); 
           break;
-        case 'ArrowLeft':
-        case 'KeyJ':
-          if (videoRef.current) videoRef.current.currentTime = Math.max(videoRef.current.currentTime - 10, 0);
-          handleMouseMove();
-          break;
-        case 'ArrowUp':
-          e.preventDefault();
-          setVolume(prev => {
-              const newVol = Math.min(prev + 0.1, 1);
-              if (videoRef.current) videoRef.current.volume = newVol;
-              return newVol;
-          });
-          handleMouseMove();
-          break;
-        case 'ArrowDown':
-          e.preventDefault();
-          setVolume(prev => {
-              const newVol = Math.max(prev - 0.1, 0);
-              if (videoRef.current) videoRef.current.volume = newVol;
-              return newVol;
-          });
-          handleMouseMove();
-          break;
-        case 'KeyF':
-          toggleFullscreen();
-          break;
-        case 'KeyM':
-          toggleMute();
+        case 'KeyF': e.preventDefault(); toggleFullscreen(); break;
+        case 'KeyM': e.preventDefault(); toggleMute(); break;
+        case 'Escape': 
+          if (showEpisodes) setShowEpisodes(false);
+          else if (fullscreen) toggleFullscreen(); 
+          else router.back(); 
           break;
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [playing, volume, duration]);
+  }, [duration, playing, fullscreen, showEpisodes, togglePlay, seekRelative, toggleFullscreen, toggleMute, router]);
 
-  // Sync state with video events
-  const onTimeUpdate = () => {
-      if(videoRef.current) {
-          setCurrentTime(videoRef.current.currentTime);
-          // Update buffer
-          if (videoRef.current.buffered.length > 0) {
-              const bufferedEnd = videoRef.current.buffered.end(videoRef.current.buffered.length - 1);
-              setBuffered(bufferedEnd);
-          }
-      }
-  };
-  const onLoadedMetadata = () => {
-      if(videoRef.current) setDuration(videoRef.current.duration);
-  };
+  // Display log
+  const displayLog = useMemo(() => sanitizeLog(lastLog), [lastLog]);
 
-  const jumpBack = (e) => {
-    e.stopPropagation();
-    if(videoRef.current) videoRef.current.currentTime -= 10;
-  };
+  // Volume icon
+  const VolumeIcon = useMemo(() => {
+    if (muted || volume === 0) return VolumeX;
+    if (volume < 0.5) return Volume1;
+    return Volume2;
+  }, [muted, volume]);
 
-  const jumpForward = (e) => {
-    e.stopPropagation();
-    if(videoRef.current) videoRef.current.currentTime += 10;
-  };
+  // Is a series?
+  const isSeries = title && title.type !== 'movie';
 
-  // ----- RENDER -----
+  // Build title line string
+  const titleLine = useMemo(() => {
+    if (!title) return '';
+    if (!isSeries) return title.primaryTitle;
+    const parts = [title.primaryTitle];
+    parts.push(`S${season}:E${episode}`);
+    if (episodeTitle) parts.push(episodeTitle);
+    return parts.join(' \u00B7 ');
+  }, [title, isSeries, season, episode, episodeTitle]);
+
+  // --- RENDER ---
 
   if (loadingTitle) {
     return (
-      <div className="fixed inset-0 bg-[#000000] z-[100] flex flex-col items-center justify-center text-white gap-4 font-mono tracking-widest">
-        <div className="text-xs uppercase text-white/60">Loading title</div>
-        <div className="h-px w-32 bg-white/20" />
+      <div className="fixed inset-0 bg-black flex items-center justify-center font-sans">
+        <Loader2 className="animate-spin text-white/30 h-8 w-8" />
       </div>
     );
   }
 
-  if (videoError && !streamUrl) {
+  if (error) {
     return (
-      <div className="fixed inset-0 bg-[#000000] z-[100] flex flex-col items-center justify-center text-white p-8 text-center space-y-6 font-mono">
-        <div className="p-6 bg-white/10 rounded-full">
-           <AlertCircle size={64} className="text-white" />
+      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center text-white space-y-5 font-sans">
+        <p className="text-white/40 text-sm">{error}</p>
+        <div className="flex gap-3">
+          <button onClick={() => window.location.reload()} className="px-5 py-2 bg-white text-black text-sm font-semibold rounded-md hover:bg-zinc-200 transition-colors">
+            Retry
+          </button>
+          <button onClick={() => router.back()} className="px-5 py-2 text-white/60 hover:text-white text-sm transition-colors">
+            Go Back
+          </button>
         </div>
-        <div className="space-y-2">
-            <h1 className="text-3xl font-bold">Unable to Load Title</h1>
-            <p className="text-zinc-400 max-w-md mx-auto">{resolveError || videoError}</p>
-        </div>
-        <button 
-          onClick={() => router.back()}
-          className="px-8 py-3 bg-white text-black font-bold rounded-full hover:scale-105 transition-transform"
-        >
-          Go Back
-        </button>
       </div>
     );
   }
 
-  const progressPercent = duration ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
-  const bufferedPercent = duration ? Math.min(100, Math.max(0, (buffered / duration) * 100)) : 0;
+  const progressPct = duration ? (currentTime / duration) * 100 : 0;
+  const bufferedPct = duration && videoRef.current?.buffered.length 
+    ? (videoRef.current.buffered.end(videoRef.current.buffered.length - 1) / duration) * 100 
+    : 0;
 
   return (
     <div 
       ref={containerRef}
-      className={`fixed inset-0 w-full h-full bg-black z-[100] overflow-hidden group select-none font-mono ${playing && !showControls ? 'cursor-none' : ''}`}
+      className={`fixed inset-0 w-screen h-screen bg-black overflow-hidden select-none font-sans ${playing && !showControls ? 'cursor-none' : ''}`}
       onMouseMove={handleMouseMove}
-      onMouseLeave={() => playing && setShowControls(false)}
-      onDoubleClick={toggleFullscreen}
-      onClick={togglePlay} // Clicking anywhere on the screen toggles play
+      onClick={(e) => { if (!showEpisodes) togglePlay(e); }}
+      onDoubleClick={(e) => { e.stopPropagation(); toggleFullscreen(); }}
     >
       {/* Video Layer */}
-      <video
-        ref={videoRef}
-        src={streamUrl}
-        className="w-full h-full object-contain pointer-events-none" // Pointer events handled by parent div
-        autoPlay
-        playsInline
-        onTimeUpdate={onTimeUpdate}
-        onLoadedMetadata={onLoadedMetadata}
-        onWaiting={() => setVideoLoading(true)}
-        onPlaying={() => {
-            setVideoLoading(false);
-            setPlaying(true);
-          handleMouseMove();
+      <motion.div
+        className="absolute inset-0"
+        initial={{ opacity: 0 }}
+        animate={{ 
+          opacity: streamUrl ? 1 : 0,
+          scale: isPaused ? 1.02 : 1,
+          filter: isPaused ? 'saturate(0.15) brightness(0.7)' : 'saturate(1) brightness(1)'
         }}
-        onPause={() => setPlaying(false)}
-        onEnded={() => {
-            setPlaying(false);
-            setShowControls(true);
-        }}
-      />
+        transition={{ opacity: { duration: 0.6 }, scale: { duration: 0.5, ease: 'easeOut' }, filter: { duration: 0.5 } }}
+      >
+        <video
+          ref={videoRef}
+          className="w-full h-full object-contain"
+          src={streamUrl}
+          autoPlay
+          playsInline
+          onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
+          onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
+          onWaiting={() => setWaiting(true)}
+          onPlaying={() => { setWaiting(false); setPlaying(true); setIsPaused(false); }}
+          onPause={() => setPlaying(false)}
+          onEnded={() => { setPlaying(false); setShowControls(true); }}
+        />
+      </motion.div>
 
-      {/* Resolve Log Overlay */}
+      {/* Overlays */}
+      <AnimatePresence mode="wait">
+        {/* Buffering */}
+        {waiting && !resolving && (
+          <motion.div key="buffering" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+            <Loader2 className="w-10 h-10 text-white/40 animate-spin" />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Play/Pause Center Feedback */}
       <AnimatePresence>
-        {resolving && (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.98 }} 
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.98 }}
+        {playbackFeedback && (
+          <motion.div key={playbackFeedback}
+            initial={{ opacity: 0.9, scale: 0.8 }}
+            animate={{ opacity: 0, scale: 1.6 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.4, ease: 'easeOut' }}
             className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
           >
-            <div className="watch-log-panel">
-              <div className="watch-log-title">EXTRACTING STREAM</div>
-              <div className="watch-log-body">
-                {(resolveLogs.length ? resolveLogs : ['[StreamService] Starting resolver...']).map((line, index) => (
-                  <div key={`${line}-${index}`} className="watch-log-line">
-                    {line}
-                  </div>
-                ))}
-                <div className="watch-log-caret" />
-              </div>
-              <div className="watch-log-scanline" />
+            <div className="bg-black/50 backdrop-blur-md p-5 rounded-full">
+              {playbackFeedback === 'play' 
+                ? <Play size={40} fill="white" stroke="none" className="ml-1" /> 
+                : <Pause size={40} fill="white" stroke="none" />
+              }
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Buffering Text */}
+      {/* Resolution Loading */}
       <AnimatePresence>
-        {videoLoading && !resolving && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 flex items-center justify-center pointer-events-none z-10"
+        {resolving && (
+          <motion.div key="resolve" initial={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.4 } }}
+            className="absolute inset-0 bg-black z-30 flex items-center justify-center"
           >
-            <div className="text-[10px] uppercase tracking-[0.4em] text-white/70 animate-pulse">
-              Buffering
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-4 w-4 animate-spin text-white/40" />
+              <span className="text-[13px] text-white/40 font-medium tracking-wide">{displayLog}</span>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Control Overlay */}
+      {/* Controls */}
       <AnimatePresence>
-        {showControls && (
+        {showControls && !resolving && (
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="absolute inset-0 z-20 flex flex-col justify-between pointer-events-none"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="absolute inset-0 z-40 flex flex-col justify-between pointer-events-none"
           >
-            {/* Gradient Overlay */}
-            <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/50 pointer-events-none" />
+            {/* Gradient */}
+            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30 pointer-events-none" />
 
-            {/* Top Rail */}
-            <div className="relative z-30 flex items-start justify-between p-6 pointer-events-auto">
-              <div className="flex flex-col items-start gap-4">
-                <button 
-                  onClick={(e) => { e.stopPropagation(); router.back(); }}
-                  className="group flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white transition-all hover:bg-white/10"
-                >
-                  <ArrowLeft size={18} />
-                </button>
-                <div className="h-8 w-px bg-white/20" />
-                <div className="flex flex-col gap-1">
-                  <div className="text-[10px] uppercase tracking-[0.4em] text-white/60">Now Playing</div>
-                  <div className="text-lg md:text-xl font-semibold tracking-tight text-white/90">
-                    {title.primaryTitle}
-                  </div>
-                  {(title.type === 'tvSeries' || title.type === 'tvMiniSeries') && (
-                    <div className="text-[11px] uppercase tracking-[0.3em] text-white/60">
-                      Season {season} · Episode {episode}
-                    </div>
-                  )}
-                </div>
-              </div>
+            {/* Top */}
+            <div className="relative z-10 w-full p-6 flex items-center pointer-events-auto">
+              <button onClick={(e) => { e.stopPropagation(); router.back(); }}
+                className="text-white/90 hover:text-white transition-colors">
+                <ArrowLeft size={28} />
+              </button>
             </div>
 
-            {/* Center Play Glyph */}
-            <div className="relative z-30 flex-grow flex items-center justify-center pointer-events-none">
-                {!playing && !videoLoading && (
-                    <motion.div 
-                        initial={{ scale: 0.9, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        className="pointer-events-none"
-                    >
-                  <div className="h-20 w-20 rounded-full border border-white/10 bg-white/5 p-5">
-                    <PlayGlyph className="h-full w-full text-white" />
-                  </div>
-                    </motion.div>
-                )}
-            </div>
-
-            {/* Bottom Controls */}
-            <div className="relative z-30 flex flex-col gap-4 w-full max-w-[1100px] mx-auto pb-10 pointer-events-auto" onClick={(e) => e.stopPropagation()}>
+            {/* Bottom */}
+            <div className="relative z-10 w-full px-6 md:px-10 pb-8 pointer-events-auto flex flex-col" onClick={(e) => e.stopPropagation()}>
                
-               {/* Progress Bar Container */}
-               <div 
-                 ref={timelineRef}
-                 className="group/timeline w-full h-7 flex items-center cursor-pointer relative" 
-                 onClick={handleSeek}
-                 onMouseMove={handleTimelineHover}
-                 onMouseLeave={() => setHoverTime(null)}
-               >
-                  {/* Background Track */}
-                  <div className="w-full h-1 bg-white/15 rounded-full overflow-hidden relative transition-all duration-200 group-hover/timeline:h-1.5">
-                    {/* Buffer Bar */}
-                    <div 
-                      className="absolute h-full bg-white/25"
-                      style={{ width: `${bufferedPercent}%` }}
-                    />
-                    {/* Playhead */}
-                    <div 
-                      className="h-full bg-white relative z-10"
-                      style={{ width: `${progressPercent}%` }}
-                    />
-                  </div>
-                  
-                  {hoverTime !== null && (
-                    <div 
-                      className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-3 bg-white/60 rounded-full pointer-events-none z-20"
-                      style={{ left: `${hoverPos}%` }}
-                    />
-                  )}
-                  <div 
-                    className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg scale-0 group-hover/timeline:scale-100 transition-transform pointer-events-none z-20"
-                    style={{ left: `${progressPercent}%` }}
-                  />
+              {/* Timeline */}
+              <div 
+                ref={timelineRef}
+                className="relative w-full h-[18px] cursor-pointer group/tl flex items-center"
+                onClick={handleSeekClick}
+                onMouseMove={handleTimelineHover}
+                onMouseLeave={handleTimelineLeave}
+              >
+                {/* Track */}
+                <div className="absolute top-1/2 -translate-y-1/2 w-full h-[4px] bg-white/20 rounded-full group-hover/tl:h-[6px] transition-all">
+                  {/* Buffer */}
+                  <div className="absolute h-full bg-white/30 rounded-full transition-all" style={{ width: `${bufferedPct}%` }} />
+                  {/* Progress */}
+                  <div className="absolute h-full bg-white rounded-full" style={{ width: `${progressPct}%` }} />
+                </div>
+                
+                {/* Scrubber Knob */}
+                <div 
+                  className="absolute top-1/2 -translate-y-1/2 w-[14px] h-[14px] bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.4)] scale-0 group-hover/tl:scale-100 transition-transform z-10"
+                  style={{ left: `calc(${progressPct}% - 7px)` }} 
+                />
 
-                  {hoverTime !== null && (
-                    <div 
-                      className="absolute bottom-full mb-3 -translate-x-1/2 px-2 py-1 bg-black/80 text-white text-xs rounded border border-white/10 pointer-events-none whitespace-nowrap"
-                      style={{ left: `${hoverPos}%` }}
-                    >
+                {/* Hover Time */}
+                {hoverTime !== null && (
+                  <div
+                    className="absolute bottom-full mb-3 -translate-x-1/2 flex flex-col items-center pointer-events-none z-20"
+                    style={{ left: `${hoverPos}%` }}
+                  >
+                    <div className="bg-black/90 text-white text-xs font-bold px-2.5 py-1 rounded-md shadow-lg">
                       {formatTime(hoverTime)}
                     </div>
-                  )}
-               </div>
+                  </div>
+                )}
+              </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex flex-1 items-center justify-between rounded-[28px] border border-white/10 bg-black/40 px-4 py-3 shadow-[0_12px_40px_rgba(0,0,0,0.55)]">
-                  <div className="flex items-center gap-4">
-                    <button 
-                      onClick={togglePlay} 
-                      className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition-transform hover:scale-105 active:scale-95"
-                    >
-                      {playing ? (
-                        <PauseGlyph className="h-5 w-5" />
-                      ) : (
-                        <PlayGlyph className="h-5 w-5" />
-                      )}
+              {/* Title line below timeline */}
+              <div className="flex items-center justify-between mt-1 mb-2 px-0.5">
+                <span className="text-white/80 text-[13px] font-medium truncate max-w-[60%]">{titleLine}</span>
+                <span className="text-white/40 text-xs tabular-nums">{formatTime(currentTime)} / {formatTime(duration)}</span>
+              </div>
+
+              {/* Controls Row */}
+              <div className="flex items-center justify-between">
+                
+                {/* Left */}
+                <div className="flex items-center gap-5">
+                  <button onClick={togglePlay} className="text-white hover:text-white/80 transition-colors">
+                    {playing ? <Pause size={28} fill="currentColor" /> : <Play size={28} fill="currentColor" />}
+                  </button>
+                  
+                  <button onClick={(e) => { e.stopPropagation(); seekRelative(-10); }} className="relative text-white hover:text-white/80 transition-colors">
+                    <RotateCcw size={22} />
+                    <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold mt-[1px]">10</span>
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); seekRelative(10); }} className="relative text-white hover:text-white/80 transition-colors">
+                    <RotateCw size={22} />
+                    <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold mt-[1px]">10</span>
+                  </button>
+
+                  {/* Volume */}
+                  <div className="relative flex items-center gap-2"
+                       onMouseEnter={handleVolumeEnter}
+                       onMouseLeave={handleVolumeLeave}>
+                    <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="text-white hover:text-white/80 transition-colors">
+                      <VolumeIcon size={22} />
                     </button>
-                    
-                    <div className="hidden md:flex items-center gap-3 text-white/70">
-                      <button onClick={jumpBack} className="hover:text-white transition-colors">
-                        <RotateCcw size={18} />
-                      </button>
-                      <button onClick={jumpForward} className="hover:text-white transition-colors">
-                        <RotateCw size={18} />
-                      </button>
-                    </div>
-
-                    <div className="relative group/volume flex items-center justify-center w-7 h-7">
-                      <button onClick={toggleMute} className="text-white/80 hover:text-white z-10 relative">
-                        {muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
-                      </button>
-                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 pb-4 opacity-0 group-hover/volume:opacity-100 transition-opacity duration-200 flex flex-col items-center pointer-events-none group-hover/volume:pointer-events-auto">
-                        <div className="w-8 h-32 bg-[#181818]/95 rounded-full border border-white/10 flex items-center justify-center p-2 relative shadow-xl">
-                          <input
-                            type="range" min="0" max="1" step="0.05"
-                            value={volume}
-                            onChange={handleVolumeChange}
-                            className="range-vertical w-full h-full cursor-pointer appearance-none bg-transparent"
-                            style={{
-                              writingMode: 'bt-lr',
-                              WebkitAppearance: 'slider-vertical',
-                            }}
-                          />
-                        </div>
+                    <div className={`flex items-center overflow-hidden transition-all duration-300 ease-in-out ${showVolumeSlider ? 'w-[80px] opacity-100' : 'w-0 opacity-0'}`}>
+                      <div className="relative w-[80px] h-[20px] flex items-center">
+                        {/* Track background */}
+                        <div className="absolute left-0 right-0 h-[3px] bg-white/20 rounded-full" />
+                        {/* Track fill */}
+                        <div className="absolute left-0 h-[3px] bg-white rounded-full pointer-events-none" style={{ width: `${volume * 100}%` }} />
+                        {/* Native range input on top for proper interaction */}
+                        <input 
+                          type="range" min="0" max="1" step="0.01" value={volume}
+                          onChange={handleVolumeChange}
+                          onClick={(e) => e.stopPropagation()}
+                          className="absolute w-full h-full opacity-0 cursor-pointer z-10"
+                        />
+                        {/* Visual knob */}
+                        <div className="absolute h-3 w-3 bg-white rounded-full shadow-sm pointer-events-none"
+                             style={{ left: `calc(${volume * 100}% - 6px)` }} />
                       </div>
                     </div>
                   </div>
-
-                  <div className="text-[11px] uppercase tracking-[0.35em] text-white/60">
-                    {formatTime(currentTime)} / {formatTime(duration)}
-                  </div>
                 </div>
 
-                <div className="flex items-center gap-4 rounded-[28px] border border-white/10 bg-black/40 px-4 py-3">
-                  <button
-                    onClick={togglePiP}
-                    className={`text-white/70 hover:text-white transition-all ${isPiP ? 'text-white' : ''}`}
-                    title="Picture in Picture"
-                  >
-                    <PictureInPicture size={18} />
-                  </button>
-                  <button className="text-white/70 hover:text-white transition-all" title="Settings">
-                    <Settings size={18} />
-                  </button>
-                  <button onClick={toggleFullscreen} className="text-white hover:text-white/80 transition-all">
-                    {fullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+                {/* Right */}
+                <div className="flex items-center gap-4">
+                  {isSeries && (
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); openEpisodesPanel(); }}
+                      className="flex items-center gap-2 text-white/80 hover:text-white transition-colors text-sm font-medium"
+                    >
+                      <ListVideo size={20} />
+                      <span className="hidden md:inline">Episodes</span>
+                    </button>
+                  )}
+                  
+                  <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} className="text-white/80 hover:text-white transition-colors">
+                    {fullscreen ? <Minimize size={22} /> : <Maximize size={22} />}
                   </button>
                 </div>
               </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Episodes Side Panel */}
+      <AnimatePresence>
+        {showEpisodes && isSeries && (
+          <motion.div
+            key="episodes-panel"
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+            className="absolute top-0 right-0 h-full w-[340px] md:w-[400px] bg-neutral-900/95 backdrop-blur-xl z-50 flex flex-col border-l border-white/5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+              <div>
+                <h3 className="text-white font-semibold text-base">{title.primaryTitle}</h3>
+                <p className="text-white/40 text-xs mt-0.5">Season {season}</p>
+              </div>
+              <button onClick={() => setShowEpisodes(false)} className="text-white/50 hover:text-white transition-colors p-1">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Episode List */}
+            <div className="flex-1 overflow-y-auto py-2 scrollbar-thin scrollbar-thumb-white/10">
+              {loadingEpisodes ? (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="w-5 h-5 text-white/30 animate-spin" />
+                </div>
+              ) : episodes.length === 0 ? (
+                <p className="text-white/30 text-sm text-center py-16">No episodes found</p>
+              ) : (
+                episodes.map((ep) => {
+                  const isActive = String(ep.episodeNumber) === String(episode);
+                  return (
+                    <button
+                      key={ep.id || ep.episodeNumber}
+                      onClick={() => {
+                        setShowEpisodes(false);
+                        router.push(`/watch/${id}?season=${season}&episode=${ep.episodeNumber}`);
+                      }}
+                      className={`w-full text-left px-5 py-3 flex items-start gap-3 transition-colors ${
+                        isActive ? 'bg-white/10' : 'hover:bg-white/5'
+                      }`}
+                    >
+                      <span className={`text-sm font-bold tabular-nums min-w-[24px] ${isActive ? 'text-white' : 'text-white/40'}`}>
+                        {ep.episodeNumber}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm font-medium truncate ${isActive ? 'text-white' : 'text-white/70'}`}>
+                          {ep.primaryTitle || `Episode ${ep.episodeNumber}`}
+                        </p>
+                        {ep.plot && (
+                          <p className="text-white/30 text-xs mt-0.5 line-clamp-2">{ep.plot}</p>
+                        )}
+                      </div>
+                      {isActive && (
+                        <div className="flex items-center gap-1 text-white/60 text-xs shrink-0 mt-0.5">
+                          <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
+                          Now
+                        </div>
+                      )}
+                    </button>
+                  );
+                })
+              )}
             </div>
           </motion.div>
         )}

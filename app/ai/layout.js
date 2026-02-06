@@ -16,8 +16,7 @@ export default async function Layout({ children }) {
   }
 
   return (
-    <div className="fixed inset-0 flex overflow-hidden bg-aurora text-white font-sans">
-      <div className="absolute inset-0 bg-black/40 pointer-events-none" />
+    <div className="fixed inset-0 flex overflow-hidden bg-[#151515] text-white font-sans">
       <ChatSidebar chats={chats} />
       {children}
     </div>

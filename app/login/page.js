@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 
 export default function LoginPage() {
   return (
-    <div className="min-h-screen text-white flex flex-col items-center justify-center relative overflow-hidden" style={{ backgroundColor: '#181818' }}>
+    <div className="min-h-screen text-white flex flex-col items-center justify-center relative overflow-hidden">
       {/* Background Effects */}
       <div className="absolute inset-0 z-0 pointer-events-none">
         <div className="absolute top-[-20%] left-[-10%] w-[800px] h-[800px] bg-white/5 rounded-full blur-[120px] opacity-20 animate-pulse" />
