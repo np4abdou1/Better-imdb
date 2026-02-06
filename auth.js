@@ -1,8 +1,8 @@
 import NextAuth from "next-auth"
 import GitHub from "next-auth/providers/github"
 import Credentials from "next-auth/providers/credentials"
-import { createUser, getUserByEmail, getUserById } from "./lib/db.js"
-import db from "./lib/db.js"
+import { createUser, getUserByEmail, getUserById } from "./lib/db"
+import db from "./lib/db"
 import { authConfig } from "./auth.config.js"
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
