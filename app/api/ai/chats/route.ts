@@ -53,7 +53,7 @@ export async function POST(req) {
     
     const db = await getDb();
     await db.collection('ai_chats').insertOne({
-        _id: id,
+        _id: id as any,
         user_id: session.user.id,
         title: title || 'New Chat',
         created_at: now,

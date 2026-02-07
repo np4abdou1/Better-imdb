@@ -86,8 +86,9 @@ export async function POST(request: NextRequest) {
           try {
              const lastUserMsg = userMessages[userMessages.length - 1];
              if (lastUserMsg && lastUserMsg.role === 'user') {
+                 // @ts-ignore
                  await db.collection('ai_messages').insertOne({
-                     _id: randomUUID(),
+                     _id: randomUUID() as any,
                      chat_id: chatId,
                      role: 'user',
                      content: lastUserMsg.content,
@@ -144,8 +145,9 @@ Use this information to:
           // Save Assistant Message
           if (chatId && fullResponse) {
              try {
+                // @ts-ignore
                 await db.collection('ai_messages').insertOne({
-                    _id: randomUUID(),
+                    _id: randomUUID() as any,
                     chat_id: chatId,
                     role: 'assistant',
                     content: fullResponse,
