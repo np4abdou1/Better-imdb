@@ -1,0 +1,26 @@
+# Better-IMDB Systemd Service
+# Install: sudo cp betterimdb.service /etc/systemd/system/
+# Enable: sudo systemctl enable betterimdb
+# Start: sudo systemctl start betterimdb
+# Status: sudo systemctl status betterimdb
+
+[Unit]
+Description=Better-IMDB Production Server
+After=network.target
+
+[Service]
+Type=forking
+User=joyboy
+WorkingDirectory=/home/joyboy/Better-imdb
+ExecStart=/home/joyboy/Better-imdb/start-vps.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/home/joyboy/Better-imdb/logs/service.log
+StandardError=append:/home/joyboy/Better-imdb/logs/service-error.log
+
+# Environment variables (add your own)
+Environment="NODE_ENV=production"
+Environment="PYTHON_API_URL=http://localhost:8000"
+
+[Install]
+WantedBy=multi-user.target
