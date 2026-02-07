@@ -18,8 +18,8 @@ export interface StreamMapping {
   imdb_id: string;
   provider_id: string | null;
   type: string | null;
-  metadata: string | null;
+  metadata: Record<string, any> | string | null;
   cached_stream_url?: string | null;
   expires_at?: number | null;
-  created_at?: string;
+  created_at?: string | Date;
 }

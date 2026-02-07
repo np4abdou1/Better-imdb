@@ -1,8 +1,6 @@
-import db from './db';
+import { getDb } from './db';
 import { API_BASE } from './api-config';
 import { StreamMapping } from '@/types';
-// @ts-ignore
-import { Database } from 'better-sqlite3';
 
 // Python API configuration
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000';
@@ -63,44 +61,36 @@ const checkSimilarity = (title1?: string | null, title2?: string | null): boolea
 };
 
 // Database interactions
-const getMapping = (imdbId: string): StreamMapping | undefined => {
+const getMapping = async (imdbId: string): Promise<StreamMapping | undefined> => {
   try {
-    return (db as any).prepare('SELECT * FROM stream_mappings WHERE imdb_id = ?').get(imdbId) as StreamMapping | undefined;
+    const db = await getDb();
+    const mapping = await db.collection<StreamMapping>('stream_mappings').findOne({ imdb_id: imdbId });
+    return mapping || undefined;
   } catch (err) {
     console.error('Error fetching stream mapping:', err);
     return undefined;
   }
 };
 
-const saveMapping = (imdbId: string, providerId: string, type: string, metadata: any = null) => {
+const saveMapping = async (imdbId: string, providerId: string, type: string, metadata: any = null) => {
   try {
-    (db as any).prepare(`
-      INSERT OR REPLACE INTO stream_mappings (imdb_id, provider_id, type, metadata, updated_at)
-      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `).run(imdbId, providerId, type, metadata ? JSON.stringify(metadata) : null);
+    const db = await getDb();
+    await db.collection<StreamMapping>('stream_mappings').updateOne(
+      { imdb_id: imdbId },
+      {
+        $set: {
+          provider_id: providerId,
+          type,
+          metadata
+        },
+        $setOnInsert: {
+          created_at: new Date()
+        }
+      },
+      { upsert: true }
+    );
   } catch (err) {
-    // If table structure mismatch (updated_at vs created_at etc), ignore for now or log
-    // The table schema has 'created_at'. Let's avoid custom updated_at if it's not in schema.
-    try {
-        (db as any).prepare(`
-        INSERT OR REPLACE INTO stream_mappings (imdb_id, provider_id, type, metadata)
-        VALUES (?, ?, ?, ?)
-        `).run(imdbId, providerId, type, metadata ? JSON.stringify(metadata) : null);
-    } catch (e2) {
-      console.error('Error saving stream mapping:', e2);
-    }
-  }
-};
-
-const updateCachedStream = (imdbId: string, url: string, expiresAt: number) => {
-  try {
-    (db as any).prepare(`
-      UPDATE stream_mappings 
-      SET cached_stream_url = ?, expires_at = ?
-      WHERE imdb_id = ?
-    `).run(url, expiresAt, imdbId);
-  } catch (err) {
-    console.error('Error updating cached stream:', err);
+    console.error('Error saving stream mapping:', err);
   }
 };
 
@@ -152,7 +142,7 @@ export const getStreamForTitle = async ({ imdbId, title, originalTitle, japanese
   log(`[StreamService] Resolving: ${title} (${year}) S${season}E${episode}`);
   
   // 1. Check DB Mapping
-  let mapping: StreamMapping | undefined = getMapping(imdbId);
+  const mapping: StreamMapping | undefined = await getMapping(imdbId);
   let providerUrl: string | undefined = mapping?.provider_id;
   if (providerUrl) providerUrl = decodeURIComponent(providerUrl);
   
@@ -314,7 +304,7 @@ export const getStreamForTitle = async ({ imdbId, title, originalTitle, japanese
          };
       }
       
-      saveMapping(imdbId, providerUrl, type, metadata);
+      await saveMapping(imdbId, providerUrl, type, metadata);
     } else {
         log('[StreamService] No suitable match found after filtering.');
         return null;

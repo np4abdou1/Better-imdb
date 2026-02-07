@@ -11,8 +11,26 @@ export async function GET(request, props) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      let closed = false;
+
       const send = (payload) => {
+        if (closed) return;
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+      };
+
+      const closeStream = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        } catch (err) {
+          console.error('Error sending stream done:', err);
+        }
+        try {
+          controller.close();
+        } catch (err) {
+          console.error('Error closing resolve stream:', err);
+        }
       };
 
       try {
@@ -22,7 +40,7 @@ export async function GET(request, props) {
 
         if (!streamData) {
           send({ type: 'error', message: 'Stream not found' });
-          controller.close();
+          closeStream();
           return;
         }
 
@@ -33,12 +51,7 @@ export async function GET(request, props) {
           message: error?.message || 'Stream resolve failed'
         });
       } finally {
-        try {
-          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-          controller.close();
-        } catch (err) {
-          console.error('Error closing resolve stream:', err);
-        }
+        closeStream();
       }
     }
   });
