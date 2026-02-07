@@ -57,6 +57,7 @@ better-imdb.db*
 
 # logs
 *.log
+/logs/
 
 # OS files
 Thumbs.db
