@@ -47,7 +47,7 @@ else
 fi
 
 # Start Next.js in production mode
-echo "🎬 Starting Next.js production server on port 80..."
+echo "🎬 Starting Next.js production server on port 8080..."
 
 # Check if build exists
 if [ ! -f ".next/standalone/server.js" ]; then
@@ -60,15 +60,9 @@ echo "Copying static assets..."
 cp -r public .next/standalone/ 2>/dev/null || true
 cp -r .next/static .next/standalone/.next/ 2>/dev/null || true
 
-# Allow Node to bind to port 80 without sudo
-if ! getcap .next/standalone/server.js 2>/dev/null | grep -q cap_net_bind_service; then
-    echo "Setting capabilities to bind to port 80..."
-    sudo setcap cap_net_bind_service=+ep $(which node)
-fi
-
 # Start Next.js production server
 cd .next/standalone
-export PORT=80
+export PORT=8080
 export HOSTNAME=0.0.0.0
 nohup node server.js > ../../logs/nextjs.log 2>&1 &
 NEXTJS_PID=$!
@@ -77,7 +71,7 @@ cd ../..
 # Wait for Next.js to start
 echo "Waiting for Next.js to initialize..."
 sleep 5
-if curl -s http://localhost:80 > /dev/null; then
+if curl -s http://localhost:8080 > /dev/null; then
     echo "✅ Next.js started successfully (PID: $NEXTJS_PID)"
 else
     echo "❌ Next.js failed to start. Check logs/nextjs.log"
@@ -89,7 +83,7 @@ echo "======================================"
 echo "  ✅ Better-IMDB is running!"
 echo "======================================"
 echo "  • Python API (internal): http://localhost:8000"
-echo "  • Next.js (public): http://YOUR_VPS_IP"
+echo "  • Next.js (public): http://68.221.160.1:8080"
 echo ""
 echo "  PIDs:"
 echo "    - Python API: $PYTHON_PID"
