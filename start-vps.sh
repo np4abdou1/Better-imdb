@@ -55,6 +55,11 @@ if [ ! -f ".next/standalone/server.js" ]; then
     npm run build
 fi
 
+# Copy static files to standalone directory
+echo "Copying static assets..."
+cp -r public .next/standalone/ 2>/dev/null || true
+cp -r .next/static .next/standalone/.next/ 2>/dev/null || true
+
 # Allow Node to bind to port 80 without sudo
 if ! getcap .next/standalone/server.js 2>/dev/null | grep -q cap_net_bind_service; then
     echo "Setting capabilities to bind to port 80..."
