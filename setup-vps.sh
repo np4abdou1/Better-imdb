@@ -27,7 +27,6 @@ npm install
 
 # Create Python virtual environment
 echo "🐍 Creating Python virtual environment..."
-cd cenima-cli
 if [ ! -d "venv" ]; then
     python3 -m venv venv
     echo "✅ Virtual environment created"
@@ -39,10 +38,11 @@ fi
 echo "📦 Installing Python dependencies..."
 source venv/bin/activate
 pip install --upgrade pip
+pip install uvicorn fastapi
+cd cenima-cli
 pip install -r requirements.txt
-deactivate
-
 cd ..
+deactivate
 
 echo ""
 echo "✅ Setup complete!"

@@ -17,14 +17,19 @@ mkdir -p logs
 
 # Start Python API in background
 echo "📦 Starting Python API on port 8000..."
-cd cenima-cli
 
-if [ ! -d "venv" ]; then
+# Check if venv exists in root directory first, then cenima-cli
+if [ -d "venv" ]; then
+    VENV_PATH="venv"
+elif [ -d "cenima-cli/venv" ]; then
+    VENV_PATH="cenima-cli/venv"
+else
     echo "❌ Virtual environment not found! Run ./setup-vps.sh first"
     exit 1
 fi
 
-source venv/bin/activate
+source "$VENV_PATH/bin/activate"
+cd cenima-cli
 export PYTHONPATH=$PWD
 nohup python -m uvicorn cenima.api:app --host 0.0.0.0 --port 8000 > ../logs/python-api.log 2>&1 &
 PYTHON_PID=$!
