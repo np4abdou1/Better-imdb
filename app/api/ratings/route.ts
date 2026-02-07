@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { getDb } from '@/lib/db';
 import { auth } from '@/auth';
 
 // GET user ratings
@@ -10,8 +10,13 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const db = await getDb();
     // Always filter by user_id
-    const ratings = db.prepare('SELECT title_id, score, review, rated_at FROM ratings WHERE user_id = ? ORDER BY rated_at DESC').all(session.user.id);
+    const ratings = await db.collection('ratings')
+        .find({ user_id: session.user.id })
+        .sort({ rated_at: -1 })
+        .toArray();
+        
     return NextResponse.json({ ratings });
   } catch (error) {
     console.error('Error fetching ratings:', error);
@@ -39,15 +44,19 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Score must be between 0 and 10' }, { status: 400 });
     }
     
-    // User-scoped upsert
-    // Note: Primary Key is (user_id, title_id)
-    const stmt = db.prepare(`
-      INSERT INTO ratings (user_id, title_id, score, review, rated_at) 
-      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) 
-      ON CONFLICT(user_id, title_id) DO UPDATE SET score=excluded.score, review=excluded.review, rated_at=CURRENT_TIMESTAMP
-    `);
+    const db = await getDb();
     
-    stmt.run(session.user.id, title_id, score ?? null, review ?? null);
+    await db.collection('ratings').updateOne(
+        { user_id: session.user.id, title_id },
+        { 
+            $set: { 
+                score: score ?? null, 
+                review: review ?? null, 
+                rated_at: new Date() 
+            }
+        },
+        { upsert: true }
+    );
     
     return NextResponse.json({ message: "Rating saved", title_id, score, review });
   } catch (error) {

@@ -25,7 +25,7 @@ export default function ListDetails({ params }: { params: Promise<{ id: string }
         axios.get(`/api/lists/${id}/items`)
       ]);
 
-      const currentList = listsRes.data.find(l => l.id === parseInt(id));
+      const currentList = listsRes.data.find((l: any) => l.id === id);
       setList(currentList);
 
       // Use batch fetching for better performance (fixes N+1 problem)

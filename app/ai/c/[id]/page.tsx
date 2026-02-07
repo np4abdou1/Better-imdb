@@ -1,7 +1,8 @@
-import db from '@/lib/db';
+import { getDb } from '@/lib/db';
 import { notFound } from 'next/navigation';
 import { auth } from '@/auth';
 import ChatInterface from '@/components/ai/ChatInterface';
+import { ObjectId } from 'mongodb';
 
 export default async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -9,17 +10,45 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
 
   const { id } = await params;
   
-  const chat = db.prepare('SELECT * FROM ai_chats WHERE id = ? AND user_id = ?').get(id, session.user.id) as { title: string } | undefined;
-  
-  if (!chat) return notFound();
-  
-  const messages = db.prepare('SELECT id, chat_id, role, content FROM ai_messages WHERE chat_id = ? ORDER BY created_at ASC').all(id) as any[];
+  try {
+    const db = await getDb();
+    
+    // Validate ObjectId format
+    if (!ObjectId.isValid(id)) {
+        return notFound();
+    }
+    
+    const query = { 
+        _id: new ObjectId(id),
+        user_id: session.user.id
+    };
 
-  return (
-    <ChatInterface 
-      chatId={id} 
-      initialMessages={messages} 
-      initialTitle={chat.title} 
-    />
-  );
+    const chat = await db.collection('ai_chats').findOne(query);
+                                                      
+    if (!chat) return notFound();
+    
+    // Fetch messages
+    // Messages store chat_id as string (from create route)
+    const rawMessages = await db.collection('ai_messages')
+        .find({ chat_id: id })
+        .sort({ created_at: 1 })
+        .toArray();
+
+    const messages = rawMessages.map(m => ({
+        ...m,
+        _id: m._id.toString(),
+        id: m._id.toString()
+    }));
+    
+    return (
+      <ChatInterface 
+        chatId={id} 
+        initialMessages={messages} 
+        initialTitle={chat.title || 'New Chat'} 
+      />
+    );
+  } catch (e) {
+      console.error("Error loading chat:", e);
+      return notFound();
+  }
 }

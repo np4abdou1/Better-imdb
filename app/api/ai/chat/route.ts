@@ -5,7 +5,7 @@ import { SYSTEM_PROMPT, getToolsForCopilot, generateTasteProfile } from '@/lib/a
 import { executeTool, webSearchStreaming, getUserLists, getUserRatings } from '@/lib/ai-tools';
 import { createChatCompletions } from '@/lib/copilot-client';
 import { auth } from '@/auth';
-import db, { getUserById } from '@/lib/db';
+import { getDb, getUserById } from '@/lib/db';
 import { randomUUID } from 'crypto';
 import { NextRequest } from 'next/server';
 
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     // Get GitHub Copilot token from DB for this user, or from cookies for guests
     let githubToken = null;
     if (userId) {
-      const user = getUserById(userId);
+      const user = await getUserById(userId);
       if (user?.copilot_token) {
         githubToken = user.copilot_token;
       }
@@ -42,6 +42,8 @@ export async function POST(request: NextRequest) {
       githubToken = cookieStore.get('github_token')?.value;
     }
 
+    const db = await getDb();
+    
     // Handle Chat ID and Persistence
     let chatId = requestedChatId;
     let isNewChat = false;
@@ -52,24 +54,27 @@ export async function POST(request: NextRequest) {
          chatId = randomUUID();
          isNewChat = true;
          try {
-           const now = new Date().toISOString();
-           const result = db.prepare('INSERT INTO ai_chats (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-            .run(chatId, userId, 'New Chat', now, now);
-           console.log('POST /chat: New chat created', { chatId, userId, changes: result.changes });
+           const now = new Date();
+           const result = await db.collection('ai_chats').insertOne({
+               _id: chatId,
+               user_id: userId,
+               title: 'New Chat',
+               created_at: now,
+               updated_at: now
+           });
+           console.log('POST /chat: New chat created', { chatId, userId });
          } catch (e) {
-           console.error('POST /chat: Failed to create chat', { chatId, userId, error: e.message, code: e.code });
+           console.error('POST /chat: Failed to create chat', { chatId, userId, error: e.message });
            // Continue without persistence if DB fails
            chatId = null;
          }
        } else {
-         // Chat was pre-created (e.g., New Chat button); treat as new if empty
+         // Chat was pre-created; treat as new if empty
          try {
-           const existing = db.prepare('SELECT id FROM ai_chats WHERE id = ? AND user_id = ?')
-            .get(chatId, userId);
+           const existing = await db.collection('ai_chats').findOne({ _id: chatId, user_id: userId });
            if (existing) {
-            const countRow = db.prepare('SELECT COUNT(*) as count FROM ai_messages WHERE chat_id = ?')
-              .get(chatId) as { count: number } | undefined;
-            if (countRow?.count === 0) isNewChat = true;
+            const count = await db.collection('ai_messages').countDocuments({ chat_id: chatId });
+            if (count === 0) isNewChat = true;
            }
          } catch (e) {
            console.error('POST /chat: Failed to check chat messages', { chatId, userId, error: e.message });
@@ -81,8 +86,13 @@ export async function POST(request: NextRequest) {
           try {
              const lastUserMsg = userMessages[userMessages.length - 1];
              if (lastUserMsg && lastUserMsg.role === 'user') {
-                 db.prepare('INSERT INTO ai_messages (id, chat_id, role, content) VALUES (?, ?, ?, ?)')
-                   .run(randomUUID(), chatId, 'user', lastUserMsg.content);
+                 await db.collection('ai_messages').insertOne({
+                     _id: randomUUID(),
+                     chat_id: chatId,
+                     role: 'user',
+                     content: lastUserMsg.content,
+                     created_at: new Date()
+                 });
              }
           } catch (e) {
              console.error('Failed to save user message:', e);
@@ -90,7 +100,7 @@ export async function POST(request: NextRequest) {
        }
     }
 
-    // Build compact taste profile (RAG-lite approach)
+    // Build compact taste profile
     const tasteProfile = await generateTasteProfile(userId);
     const now = new Date();
     const currentDateContext = `Current date: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} (${now.toISOString().split('T')[0]})
@@ -134,12 +144,19 @@ Use this information to:
           // Save Assistant Message
           if (chatId && fullResponse) {
              try {
-                db.prepare('INSERT INTO ai_messages (id, chat_id, role, content) VALUES (?, ?, ?, ?)')
-                  .run(randomUUID(), chatId, 'assistant', fullResponse);
+                await db.collection('ai_messages').insertOne({
+                    _id: randomUUID(),
+                    chat_id: chatId,
+                    role: 'assistant',
+                    content: fullResponse,
+                    created_at: new Date()
+                });
 
                 // Update chat's updated_at timestamp
-                db.prepare('UPDATE ai_chats SET updated_at = ? WHERE id = ?')
-                  .run(new Date().toISOString(), chatId);
+                await db.collection('ai_chats').updateOne(
+                    { _id: chatId },
+                    { $set: { updated_at: new Date() } }
+                );
 
                 // Auto-Title Logic
                 if (isNewChat) {
@@ -147,7 +164,10 @@ Use this information to:
                    const firstUserMsg = userMessages.find(m => m.role === 'user')?.content || '';
                    const generatedTitle = await generateSummaryTitle(firstUserMsg, fullResponse, model, githubToken);
                    if (generatedTitle) {
-                      db.prepare('UPDATE ai_chats SET title = ?, updated_at = ? WHERE id = ?').run(generatedTitle, new Date().toISOString(), chatId);
+                      await db.collection('ai_chats').updateOne(
+                          { _id: chatId },
+                          { $set: { title: generatedTitle, updated_at: new Date() } }
+                      );
                       // Notify client of title change
                       controller.enqueue(encoder.encode(`data: ${JSON.stringify({
                         type: 'title_generated',
@@ -169,10 +189,9 @@ Use this information to:
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({
             type: 'error',
             error: errorMsg,
-            message: errorMsg // Include both for compatibility
+            message: errorMsg
           })}\n\n`));
         } finally {
-          // Always close the stream with a done event
           try {
             controller.enqueue(encoder.encode('data: [DONE]\n\n'));
             controller.close();
@@ -199,14 +218,9 @@ Use this information to:
   }
 }
 
-/**
- * NOTE: Server-side media_grid parsing/enrichment is intentionally removed.
- * Media grid blocks are streamed as-is and handled on the client for inline rendering.
- */
+// Logic below remains largely the same, just keeping it here for completeness if needed in the file
+// processAIConversation and generateSummaryTitle are pure functions mostly calling external APIs or encoding streams
 
-/**
- * Process AI conversation with tool calling loop
- */
 async function processAIConversation(messages, controller, encoder, model, userId = null, githubToken = null) {
   const tools = getToolsForCopilot();
   let continueLoop = true;
@@ -219,7 +233,6 @@ async function processAIConversation(messages, controller, encoder, model, userI
   while (continueLoop && iteration < maxIterations) {
     iteration++;
 
-    // Call Copilot API directly (embedded client)
     const response = await createChatCompletions({
       model,
       messages: currentMessages,
@@ -261,17 +274,8 @@ async function processAIConversation(messages, controller, encoder, model, userI
 
           if (!choice) continue;
 
-          // Debug: log all delta fields to see what's being sent
-          if (choice.delta && Object.keys(choice.delta).length > 0) {
-            const deltaKeys = Object.keys(choice.delta);
-            if (!deltaKeys.every(k => k === 'content')) {
-              console.log('[AI Stream] Delta fields available:', deltaKeys, 'Delta:', JSON.stringify(choice.delta, null, 2).substring(0, 200));
-            }
-          }
-
           if (choice.delta?.content) {
             let delta = choice.delta.content;
-            // Remove any leaked tool-call artifacts
             delta = delta.replace(/调用\s*functions\.[^\n]+/g, '');
             assistantContent += delta;
             fullAssistantContent += delta;
@@ -301,9 +305,7 @@ async function processAIConversation(messages, controller, encoder, model, userI
           if (choice.finish_reason) {
             finishReason = choice.finish_reason;
           }
-        } catch (e) {
-          // Skip malformed lines
-        }
+        } catch (e) { }
       }
     }
 
@@ -369,10 +371,8 @@ async function processAIConversation(messages, controller, encoder, model, userI
               }
             : {};
 
-          // For web_search, use streaming version for live favicon updates
           if (toolName === 'web_search') {
             result = await webSearchStreaming(args.query, (source) => {
-              // Send each source immediately as it's fetched
               controller.enqueue(encoder.encode(`data: ${JSON.stringify({
                 type: 'web_search_source',
                 source
@@ -382,7 +382,6 @@ async function processAIConversation(messages, controller, encoder, model, userI
             result = await executeTool(toolName, args, userId, options);
           }
 
-          // Check for stream_card and emit event
           if (result && result.type === 'stream_card') {
              controller.enqueue(encoder.encode(`data: ${JSON.stringify({
                 type: 'stream_card',
@@ -412,11 +411,7 @@ async function processAIConversation(messages, controller, encoder, model, userI
         });
       }
     } else {
-      // Final response - no server-side parsing/enrichment
-      // The full content (including media_grid blocks) has already been streamed
-      // Client will handle parsing and async enrichment via InlineMediaCard components
       if (!streamedText && fullAssistantContent) {
-        // Only send any remaining content if it wasn't already streamed
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({
           type: 'text',
           content: fullAssistantContent
@@ -429,9 +424,6 @@ async function processAIConversation(messages, controller, encoder, model, userI
   return fullAssistantContent;
 }
 
-/**
- * Generate a short 3-5 word title for the chat
- */
 async function generateSummaryTitle(userMessage, assistantMessage, model, githubToken = null) {
   try {
      const prompt = `Summarize the following interaction into a very short title using ONLY 2-3 words. Do not use quotes or punctuation.

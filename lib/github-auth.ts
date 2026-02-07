@@ -191,5 +191,5 @@ export async function getGitHubUser(token: string): Promise<any> {
  * Save token to user in database
  */
 export async function saveTokenToUser(userId: string, token: string): Promise<void> {
-  updateUserCopilotToken(userId, token);
+  await updateUserCopilotToken(userId, token);
 }

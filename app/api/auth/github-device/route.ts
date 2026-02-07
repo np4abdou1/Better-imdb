@@ -67,7 +67,7 @@ export async function POST(request) {
       // 1. Save to Database for this user if logged in
       if (userId) {
         console.log(`[GitHub Auth] Saving token to database for user ${userId}`);
-        updateUserCopilotToken(userId, token);
+        await updateUserCopilotToken(userId, token);
       }
 
       // 2. Initialize Copilot client with new token immediately

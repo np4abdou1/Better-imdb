@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import db from '@/lib/db';
+import { getDb } from '@/lib/db';
 import { randomUUID } from 'crypto';
 
 export async function GET(req) {
@@ -11,30 +11,27 @@ export async function GET(req) {
   }
 
   try {
-    const chats = db.prepare(`
-      SELECT id, user_id, title, created_at, updated_at
-      FROM ai_chats 
-      WHERE user_id = ? 
-      ORDER BY updated_at DESC
-      LIMIT 50
-    `).all(session.user.id) as any[];
-
-    console.log('GET /chats: Retrieved chats', { userId: session.user.id, count: chats.length });
+    const db = await getDb();
+    const chats = await db.collection('ai_chats')
+        .find({ user_id: session.user.id })
+        .sort({ updated_at: -1 })
+        .limit(50)
+        .toArray();
 
     // Add message preview to each chat
-    const chatsWithPreview = chats.map(chat => {
-      const lastMessage = db.prepare(`
-        SELECT role, content FROM ai_messages
-        WHERE chat_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-      `).get(chat.id) as { content?: string } | undefined;
+    const chatsWithPreview = await Promise.all(chats.map(async chat => {
+      const lastMessage = await db.collection('ai_messages')
+        .find({ chat_id: chat._id }) // Assuming chat id is stored in _id
+        .sort({ created_at: -1 })
+        .limit(1)
+        .next(); // get first document
 
       return {
         ...chat,
+        id: chat._id.toString(), // Map _id to id if it's not string
         preview: lastMessage?.content?.substring(0, 100) || 'No messages yet'
       };
-    });
+    }));
 
     return NextResponse.json(chatsWithPreview);
   } catch (error) {
@@ -51,13 +48,17 @@ export async function POST(req) {
 
   try {
     const { title } = await req.json();
-    const id = randomUUID();
-    const now = new Date().toISOString();
+    const id = randomUUID(); // Use UUID as _id for consistency with existing references
+    const now = new Date();
     
-    db.prepare(`
-      INSERT INTO ai_chats (id, user_id, title, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, session.user.id, title || 'New Chat', now, now);
+    const db = await getDb();
+    await db.collection('ai_chats').insertOne({
+        _id: id,
+        user_id: session.user.id,
+        title: title || 'New Chat',
+        created_at: now,
+        updated_at: now
+    });
 
     return NextResponse.json({ 
       id, 

@@ -1,8 +1,7 @@
 import NextAuth from "next-auth"
 import GitHub from "next-auth/providers/github"
 import Credentials from "next-auth/providers/credentials"
-import { createUser, getUserByEmail, getUserById } from "./lib/db"
-import db from "./lib/db"
+import { createUser, getUserByEmail, getUserById, getDb } from "./lib/db"
 import { authConfig } from "./auth.config.js"
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
@@ -15,7 +14,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       credentials: {},
       async authorize() {
         // Return test user
-        const testUser = getUserById('test-user-123');
+        const testUser = await getUserById('test-user-123');
         if (testUser) {
           return {
             id: testUser.id,
@@ -39,11 +38,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       if (!user.email) return false;
       
       try {
-        const existingUser = getUserByEmail(user.email);
+        const existingUser = await getUserByEmail(user.email);
         
         if (!existingUser) {
           // Create new user
-          createUser({
+          await createUser({
             id: user.id, 
             name: user.name,
             email: user.email,
@@ -52,8 +51,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           
           // Create default lists for new user
           const defaultLists = ['Watched', 'Watching', 'To Watch', 'Favorites'];
-          const insertList = db.prepare('INSERT INTO lists (user_id, name) VALUES (?, ?)');
-          defaultLists.forEach(name => insertList.run(user.id, name));
+          const db = await getDb();
+          const listsCollection = db.collection('lists');
+          
+          await listsCollection.insertMany(defaultLists.map(name => ({
+            user_id: user.id,
+            name,
+            created_at: new Date()
+          })));
         }
         return true;
       } catch (error) {
@@ -64,15 +69,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     async jwt({ token, user }) {
       if (user) {
         // On sign in, align token ID with Database ID
-        const dbUser = getUserByEmail(user.email);
-        if (dbUser) {
-          token.sub = dbUser.id;
+        if (user.email) {
+            const dbUser = await getUserByEmail(user.email);
+            if (dbUser) {
+               token.sub = dbUser.id;
+            } else {
+               token.sub = user.id;
+            }
         } else {
-          token.sub = user.id;
+             token.sub = user.id;
         }
       }
       return token;
     }
   }
 })
-

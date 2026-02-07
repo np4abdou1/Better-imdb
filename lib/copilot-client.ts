@@ -289,7 +289,7 @@ export async function getCopilotToken(userId?: string): Promise<string> {
     let githubToken: string | null = null;
     
     if (userId) {
-        const user = getUserById(userId);
+        const user = await getUserById(userId);
         if (user?.copilot_token) {
             githubToken = user.copilot_token;
         }

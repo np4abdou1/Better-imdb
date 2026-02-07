@@ -19,7 +19,7 @@ export async function GET(request) {
     // Get GitHub Copilot token from DB for this user, or from cookies for guests
     let githubToken = null;
     if (userId) {
-      const user = getUserById(userId);
+      const user = await getUserById(userId);
       if (user?.copilot_token) {
         githubToken = user.copilot_token;
       }
