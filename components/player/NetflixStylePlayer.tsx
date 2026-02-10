@@ -51,6 +51,27 @@ const sanitizeLog = (raw: string): string => {
   return clean.length > 40 ? clean.slice(0, 40) : clean;
 };
 
+const hasArabicCharacters = (value?: string) => {
+  if (!value) return false;
+  return /[\u0600-\u06FF]/.test(value);
+};
+
+const isArabicSubtitle = (
+  subtitle?: { label?: string; lang?: string },
+  cueText?: string
+) => {
+  if (!subtitle && !cueText) return false;
+  const label = subtitle?.label?.toLowerCase() || '';
+  const lang = subtitle?.lang?.toLowerCase() || '';
+  return (
+    hasArabicCharacters(cueText) ||
+    lang === 'ara' ||
+    lang === 'ar' ||
+    label.includes('arabic') ||
+    label.includes('عرب')
+  );
+};
+
 export interface NetflixStylePlayerProps {
     title: Title;
     initialSeason?: number;
@@ -83,9 +104,10 @@ export default function NetflixStylePlayer({
   const [loadingEpisodes, setLoadingEpisodes] = useState<boolean>(false);
   
   // Subtitles
-  const [subtitles, setSubtitles] = useState<{label: string, fileIdx: number, src: string}[]>([]);
+  const [subtitles, setSubtitles] = useState<{label: string, fileIdx: number, src: string, lang?: string}[]>([]);
   const [showSubtitleMenu, setShowSubtitleMenu] = useState<boolean>(false);
   const [currentSubtitle, setCurrentSubtitle] = useState<number | -1>(-1); // -1 = off
+  const [activeCueText, setActiveCueText] = useState('');
 
   // Stream
   const [streamUrl, setStreamUrl] = useState<string | null>(propStreamUrl || null);
@@ -241,11 +263,12 @@ export default function NetflixStylePlayer({
                 .then(data => {
                      if (data.subtitles && data.subtitles.length > 0) {
                          const mapped = data.subtitles.map((s: any, i: number) => ({
-                             fileIdx: 9999 + i, 
-                             label: s.label || s.lang,
-                             // Use proxy to avoid CORS and auto-convert SRT->VTT
-                             src: `/api/proxy/subtitles?url=${encodeURIComponent(s.url)}`
-                         }));
+                              fileIdx: 9999 + i, 
+                              label: s.label || s.lang,
+                              lang: s.lang,
+                              // Use proxy to avoid CORS and auto-convert SRT->VTT
+                              src: `/api/proxy/subtitles?url=${encodeURIComponent(s.url)}`
+                          }));
                          
                          setSubtitles(prev => {
                              return mapped;
@@ -271,6 +294,7 @@ export default function NetflixStylePlayer({
                 if (data.subtitles) {
                     const mapped = data.subtitles.map((s: any) => ({
                         ...s,
+                        lang: s.lang,
                         src: `/api/stream/magnet/${hash}?fileIdx=${s.fileIdx}`
                     }));
                     
@@ -284,6 +308,34 @@ export default function NetflixStylePlayer({
         }
 
   }, [title.id, season, episode, isSeries, streamUrl]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const tracks = Array.from(video.textTracks || []) as TextTrack[];
+    tracks.forEach((track, idx) => {
+      track.mode = idx === currentSubtitle ? 'hidden' : 'disabled';
+    });
+
+    const activeTrack = currentSubtitle >= 0 ? tracks[currentSubtitle] : null;
+    if (!activeTrack) {
+      setActiveCueText('');
+      return;
+    }
+
+    const handleCueChange = () => {
+      const activeCues = activeTrack.activeCues ? Array.from(activeTrack.activeCues) : [];
+      const cueText = activeCues
+        .map((cue) => ('text' in cue ? (cue as VTTCue).text : ''))
+        .filter(Boolean)
+        .join('\n');
+      setActiveCueText(cueText);
+    };
+
+    handleCueChange();
+    activeTrack.addEventListener('cuechange', handleCueChange);
+    return () => activeTrack.removeEventListener('cuechange', handleCueChange);
+  }, [currentSubtitle, subtitles, streamUrl, duration]);
 
   // Fetch episodes for panel
   const openEpisodesPanel = useCallback(async () => {
@@ -487,6 +539,18 @@ export default function NetflixStylePlayer({
     return parts.join(' \u00B7 ');
   }, [title, isSeries, season, episode, episodeTitle]);
 
+  const activeSubtitle = useMemo(() => {
+    if (currentSubtitle < 0) return null;
+    return subtitles[currentSubtitle] || null;
+  }, [currentSubtitle, subtitles]);
+
+  const subtitleIsArabic = useMemo(() => {
+    return isArabicSubtitle(activeSubtitle || undefined, activeCueText);
+  }, [activeSubtitle, activeCueText]);
+
+  const subtitleOffsetClass = showControls ? 'bottom-24 md:bottom-28' : 'bottom-12 md:bottom-16';
+  const showSubtitleOverlay = currentSubtitle !== -1 && activeCueText.trim().length > 0;
+
   // Switch Episode
   const handleEpisodeChange = (newSeason: number, newEpisode: number) => {
       setShowEpisodes(false);
@@ -582,17 +646,27 @@ export default function NetflixStylePlayer({
                     label={sub.label}
                     srcLang="en"
                     src={sub.src}
-                    default={idx === currentSubtitle}
-                    ref={el => {
-                         // Manually toggle mode because React 'default' prop only works on mount
-                         if (el && el.track) {
-                             el.track.mode = (idx === currentSubtitle) ? 'showing' : 'hidden';
-                         }
-                    }}
                 />
             ))}
         </video>
       </motion.div>
+
+      {showSubtitleOverlay && (
+        <div
+          className={`absolute inset-x-0 ${subtitleOffsetClass} z-30 flex justify-center px-4 pointer-events-none transition-all duration-300 ease-out`}
+        >
+          <div
+            className="max-w-4xl text-center text-white text-lg md:text-xl font-semibold leading-relaxed whitespace-pre-line"
+            style={{
+              textShadow: '0 0 4px rgba(0, 0, 0, 0.95), 0 2px 8px rgba(0, 0, 0, 0.85)',
+              direction: subtitleIsArabic ? 'rtl' : 'ltr',
+              unicodeBidi: subtitleIsArabic ? 'embed' : 'normal'
+            }}
+          >
+            {activeCueText}
+          </div>
+        </div>
+      )}
 
       {/* Overlays */}
       <AnimatePresence mode="wait">
@@ -671,13 +745,13 @@ export default function NetflixStylePlayer({
               {/* Timeline */}
               <div 
                 ref={timelineRef}
-                className="relative w-full h-[18px] cursor-pointer group/tl flex items-center"
+                className="relative w-full h-[18px] cursor-pointer group/tl flex items-center rounded-full bg-white/5 backdrop-blur-sm"
                 onClick={handleSeekClick}
                 onMouseMove={handleTimelineHover}
                 onMouseLeave={handleTimelineLeave}
               >
                 {/* Track */}
-                <div className="absolute top-1/2 -translate-y-1/2 w-full h-[4px] bg-white/20 rounded-full group-hover/tl:h-[6px] transition-all">
+                <div className="absolute top-1/2 -translate-y-1/2 w-full h-[4px] bg-white/25 rounded-full group-hover/tl:h-[6px] transition-all">
                   {/* Buffer */}
                   <div className="absolute h-full bg-white/30 rounded-full transition-all" style={{ width: `${bufferedPct}%` }} />
                   {/* Progress */}
@@ -714,15 +788,15 @@ export default function NetflixStylePlayer({
                 
                 {/* Left */}
                 <div className="flex items-center gap-5">
-                  <button onClick={(e) => { togglePlay(e); }} className="text-white hover:text-white/80 transition-colors">
+                  <button onClick={(e) => { togglePlay(e); }} className="rounded-full p-2 text-white hover:text-white/90 hover:bg-white/10 transition-colors active:scale-95">
                     {playing ? <Pause size={28} fill="currentColor" /> : <Play size={28} fill="currentColor" />}
                   </button>
                   
-                  <button onClick={(e) => { e.stopPropagation(); seekRelative(-10); }} className="relative text-white hover:text-white/80 transition-colors">
+                  <button onClick={(e) => { e.stopPropagation(); seekRelative(-10); }} className="relative rounded-full p-2 text-white hover:text-white/90 hover:bg-white/10 transition-colors active:scale-95">
                     <RotateCcw size={22} />
                     <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold mt-[1px]">10</span>
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); seekRelative(10); }} className="relative text-white hover:text-white/80 transition-colors">
+                  <button onClick={(e) => { e.stopPropagation(); seekRelative(10); }} className="relative rounded-full p-2 text-white hover:text-white/90 hover:bg-white/10 transition-colors active:scale-95">
                     <RotateCw size={22} />
                     <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold mt-[1px]">10</span>
                   </button>
@@ -731,7 +805,7 @@ export default function NetflixStylePlayer({
                   <div className="relative flex items-center gap-2"
                        onMouseEnter={handleVolumeEnter}
                        onMouseLeave={handleVolumeLeave}>
-                    <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="text-white hover:text-white/80 transition-colors">
+                    <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="rounded-full p-2 text-white hover:text-white/90 hover:bg-white/10 transition-colors active:scale-95">
                       <VolumeIcon size={22} />
                     </button>
                     <div className={`flex items-center overflow-hidden transition-all duration-300 ease-in-out ${showVolumeSlider ? 'w-[80px] opacity-100' : 'w-0 opacity-0'}`}>
@@ -815,14 +889,14 @@ export default function NetflixStylePlayer({
                   {isSeries && (
                     <button 
                       onClick={(e) => { e.stopPropagation(); openEpisodesPanel(); }}
-                      className="flex items-center gap-2 text-white/80 hover:text-white transition-colors text-sm font-medium"
+                      className="flex items-center gap-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors text-sm font-medium rounded-full px-3 py-1.5"
                     >
                       <ListVideo size={20} />
                       <span className="hidden md:inline">Episodes</span>
                     </button>
                   )}
                   
-                  <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} className="text-white/80 hover:text-white transition-colors">
+                  <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} className="rounded-full p-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors">
                     {fullscreen ? <Minimize size={22} /> : <Maximize size={22} />}
                   </button>
                 </div>

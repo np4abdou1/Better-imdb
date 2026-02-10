@@ -4,6 +4,13 @@ import { fetch as fetchNode } from 'undici';
 import { convertSubtitles } from '@/lib/srt-converter';
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+let subtitleQueue: Promise<void> = Promise.resolve();
+
+const queueSubtitleFetch = async <T>(task: () => Promise<T>): Promise<T> => {
+    const run = subtitleQueue.then(task, task);
+    subtitleQueue = run.then(() => undefined, () => undefined);
+    return run;
+};
 
 async function fetchWithRetry(url: string, retries = 2): Promise<string> {
     for (let i = 0; i <= retries; i++) {
@@ -26,7 +33,7 @@ export async function GET(request: NextRequest) {
     if (!url) return new NextResponse('Missing url', { status: 400 });
 
     try {
-        const text = await fetchWithRetry(url);
+        const text = await queueSubtitleFetch(() => fetchWithRetry(url));
         
         // Use robust conversion or fallback to simple pass-through if it's already VTT
         const output = convertSubtitles(text);

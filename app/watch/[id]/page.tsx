@@ -73,6 +73,27 @@ const formatSpeed = (bytes) => {
   return (bytes / 1024 / 1024).toFixed(1) + ' MB/s';
 };
 
+const hasArabicCharacters = (value?: string) => {
+  if (!value) return false;
+  return /[\u0600-\u06FF]/.test(value);
+};
+
+const isArabicSubtitle = (
+  subtitle?: { label?: string; lang?: string },
+  cueText?: string
+) => {
+  if (!subtitle && !cueText) return false;
+  const label = subtitle?.label?.toLowerCase() || '';
+  const lang = subtitle?.lang?.toLowerCase() || '';
+  return (
+    hasArabicCharacters(cueText) ||
+    lang === 'ara' ||
+    lang === 'ar' ||
+    label.includes('arabic') ||
+    label.includes('عرب')
+  );
+};
+
 export default function WatchPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const searchParams = useSearchParams();
@@ -107,6 +128,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
   const [currentSubtitle, setCurrentSubtitle] = useState(-1); // -1 = off
   const [expandedLang, setExpandedLang] = useState<string | null>(null); // For grouped subtitle menu
+  const [activeCueText, setActiveCueText] = useState('');
   
   // Player
   const videoRef = useRef(null);
@@ -359,6 +381,34 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     }
   }, [id, season, episode, title, streamUrl]);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const tracks = Array.from(video.textTracks || []) as TextTrack[];
+    tracks.forEach((track, idx) => {
+      track.mode = idx === currentSubtitle ? 'hidden' : 'disabled';
+    });
+
+    const activeTrack = currentSubtitle >= 0 ? tracks[currentSubtitle] : null;
+    if (!activeTrack) {
+      setActiveCueText('');
+      return;
+    }
+
+    const handleCueChange = () => {
+      const activeCues = activeTrack.activeCues ? Array.from(activeTrack.activeCues) : [];
+      const cueText = activeCues
+        .map((cue) => ('text' in cue ? (cue as VTTCue).text : ''))
+        .filter(Boolean)
+        .join('\n');
+      setActiveCueText(cueText);
+    };
+
+    handleCueChange();
+    activeTrack.addEventListener('cuechange', handleCueChange);
+    return () => activeTrack.removeEventListener('cuechange', handleCueChange);
+  }, [currentSubtitle, subtitles, streamUrl, duration]);
+
   // Fetch episodes for panel
   const openEpisodesPanel = useCallback(async () => {
     if (showEpisodes) { setShowEpisodes(false); return; }
@@ -497,6 +547,11 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     volumeTimeoutRef.current = setTimeout(() => setShowVolumeSlider(false), 300);
   }, []);
 
+  const handleBack = useCallback(async () => {
+    await cleanupTorrent(streamUrl);
+    router.back();
+  }, [router, streamUrl]);
+
   // Keyboard
   useEffect(() => {
     const handleKey = (e) => {
@@ -518,13 +573,13 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
         case 'Escape': 
           if (showEpisodes) setShowEpisodes(false);
           else if (fullscreen) toggleFullscreen(); 
-          else router.back(); 
+          else handleBack(); 
           break;
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [duration, playing, fullscreen, showEpisodes, togglePlay, seekRelative, toggleFullscreen, toggleMute, router]);
+  }, [duration, playing, fullscreen, showEpisodes, togglePlay, seekRelative, toggleFullscreen, toggleMute, handleBack]);
 
   // Display log
   const displayLog = useMemo(() => sanitizeLog(lastLog), [lastLog]);
@@ -554,6 +609,15 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     return parts.join(' \u00B7 ');
   }, [title, isSeries, season, episode, episodeTitle]);
 
+  const activeSubtitle = useMemo(() => {
+    if (currentSubtitle < 0) return null;
+    return subtitles[currentSubtitle] || null;
+  }, [currentSubtitle, subtitles]);
+
+  const subtitleIsArabic = useMemo(() => {
+    return isArabicSubtitle(activeSubtitle || undefined, activeCueText);
+  }, [activeSubtitle, activeCueText]);
+
   // Group subtitles by language for the grouped menu
   const subtitleGroups = useMemo(() => {
     const groups: Record<string, typeof subtitles> = {};
@@ -564,6 +628,9 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     });
     return groups;
   }, [subtitles]);
+
+  const subtitleOffsetClass = showControls ? 'bottom-28 md:bottom-32' : 'bottom-16 md:bottom-20';
+  const showSubtitleOverlay = currentSubtitle !== -1 && activeCueText.trim().length > 0;
 
   // --- RENDER ---
 
@@ -591,7 +658,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
           <button onClick={() => window.location.reload()} className="px-5 py-2 bg-white text-black text-sm font-semibold rounded-md hover:bg-zinc-200 transition-colors">
             Retry
           </button>
-          <button onClick={() => router.back()} className="px-5 py-2 text-white/60 hover:text-white text-sm transition-colors">
+          <button onClick={handleBack} className="px-5 py-2 text-white/60 hover:text-white text-sm transition-colors">
             Go Back
           </button>
         </div>
@@ -682,16 +749,27 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
               label={sub.label}
               srcLang="en"
               src={sub.src}
-              default={idx === currentSubtitle}
-              ref={(el) => {
-                if (el && el.track) {
-                  el.track.mode = idx === currentSubtitle ? 'showing' : 'hidden';
-                }
-              }}
             />
           ))}
         </video>
       </motion.div>
+
+      {showSubtitleOverlay && (
+        <div
+          className={`absolute inset-x-0 ${subtitleOffsetClass} z-30 flex justify-center px-4 pointer-events-none transition-all duration-300 ease-out`}
+        >
+          <div
+            className="max-w-4xl text-center text-white text-lg md:text-xl font-semibold leading-relaxed whitespace-pre-line"
+            style={{
+              textShadow: '0 0 4px rgba(0, 0, 0, 0.95), 0 2px 8px rgba(0, 0, 0, 0.85)',
+              direction: subtitleIsArabic ? 'rtl' : 'ltr',
+              unicodeBidi: subtitleIsArabic ? 'embed' : 'normal'
+            }}
+          >
+            {activeCueText}
+          </div>
+        </div>
+      )}
 
       {/* Overlays */}
       <AnimatePresence mode="wait">
@@ -751,7 +829,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
             {/* Top */}
             <div className="relative z-10 w-full p-6 flex items-center pointer-events-auto">
-              <button onClick={(e) => { e.stopPropagation(); router.back(); }}
+              <button onClick={(e) => { e.stopPropagation(); handleBack(); }}
                 className="text-white/90 hover:text-white transition-colors">
                 <ArrowLeft size={28} />
               </button>
@@ -763,13 +841,13 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
               {/* Timeline */}
               <div 
                 ref={timelineRef}
-                className="relative w-full h-[18px] cursor-pointer group/tl flex items-center"
+                className="relative w-full h-[18px] cursor-pointer group/tl flex items-center rounded-full bg-white/5 backdrop-blur-sm"
                 onClick={handleSeekClick}
                 onMouseMove={handleTimelineHover}
                 onMouseLeave={handleTimelineLeave}
               >
                 {/* Track */}
-                <div className="absolute top-1/2 -translate-y-1/2 w-full h-[4px] bg-white/20 rounded-full group-hover/tl:h-[6px] transition-all">
+                <div className="absolute top-1/2 -translate-y-1/2 w-full h-[4px] bg-white/25 rounded-full group-hover/tl:h-[6px] transition-all">
                   {/* Buffer */}
                   <div className="absolute h-full bg-white/30 rounded-full transition-all" style={{ width: `${bufferedPct}%` }} />
                   {/* Progress */}
@@ -824,15 +902,15 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                 
                 {/* Left */}
                 <div className="flex items-center gap-5">
-                  <button onClick={togglePlay} className="text-white hover:text-white/80 transition-colors">
+                  <button onClick={togglePlay} className="rounded-full p-2 text-white hover:text-white/90 hover:bg-white/10 transition-colors active:scale-95">
                     {playing ? <Pause size={28} fill="currentColor" /> : <Play size={28} fill="currentColor" />}
                   </button>
                   
-                  <button onClick={(e) => { e.stopPropagation(); seekRelative(-10); }} className="relative text-white hover:text-white/80 transition-colors">
+                  <button onClick={(e) => { e.stopPropagation(); seekRelative(-10); }} className="relative rounded-full p-2 text-white hover:text-white/90 hover:bg-white/10 transition-colors active:scale-95">
                     <RotateCcw size={22} />
                     <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold mt-[1px]">10</span>
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); seekRelative(10); }} className="relative text-white hover:text-white/80 transition-colors">
+                  <button onClick={(e) => { e.stopPropagation(); seekRelative(10); }} className="relative rounded-full p-2 text-white hover:text-white/90 hover:bg-white/10 transition-colors active:scale-95">
                     <RotateCw size={22} />
                     <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold mt-[1px]">10</span>
                   </button>
@@ -841,7 +919,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                   <div className="relative flex items-center gap-2"
                        onMouseEnter={handleVolumeEnter}
                        onMouseLeave={handleVolumeLeave}>
-                    <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="text-white hover:text-white/80 transition-colors">
+                    <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="rounded-full p-2 text-white hover:text-white/90 hover:bg-white/10 transition-colors active:scale-95">
                       <VolumeIcon size={22} />
                     </button>
                     <div className={`flex items-center overflow-hidden transition-all duration-300 ease-in-out ${showVolumeSlider ? 'w-[80px] opacity-100' : 'w-0 opacity-0'}`}>
@@ -872,7 +950,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                   <div className="relative">
                     <button 
                       onClick={(e) => { e.stopPropagation(); setShowSubtitleMenu(!showSubtitleMenu); setShowSourceSelector(false); }}
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${currentSubtitle !== -1 ? 'text-white bg-white/10' : 'text-white/60 hover:text-white'}`}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors hover:bg-white/10 ${currentSubtitle !== -1 ? 'text-white bg-white/10' : 'text-white/60 hover:text-white'}`}
                       title="Subtitles"
                     >
                       <Captions size={20} strokeWidth={currentSubtitle !== -1 ? 2.5 : 1.5} />
@@ -1035,14 +1113,14 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                   {isSeries && (
                     <button 
                       onClick={(e) => { e.stopPropagation(); openEpisodesPanel(); }}
-                      className="flex items-center gap-2 text-white/80 hover:text-white transition-colors text-sm font-medium"
+                      className="flex items-center gap-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors text-sm font-medium rounded-full px-3 py-1.5"
                     >
                       <ListVideo size={20} />
                       <span className="hidden md:inline">Episodes</span>
                     </button>
                   )}
                   
-                  <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} className="text-white/80 hover:text-white transition-colors">
+                  <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} className="rounded-full p-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors">
                     {fullscreen ? <Minimize size={22} /> : <Maximize size={22} />}
                   </button>
                 </div>
