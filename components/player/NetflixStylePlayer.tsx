@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, ReactEventHandler, SyntheticEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { getTitleEpisodes } from '@/lib/api';
+import { cleanupTorrent, handleBeforeUnload } from '@/lib/cleanup-utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Play, Pause, Volume2, VolumeX, Volume1, Maximize, Minimize, 
@@ -190,6 +191,37 @@ export default function NetflixStylePlayer({
     };
     return () => source.close();
   }, [title.id, season, episode, propStreamUrl]);
+
+  // Track previous streamUrl to cleanup old torrent when switching
+  const prevStreamUrlRef = useRef<string | null>(null);
+  
+  // Cleanup previous torrent when streamUrl changes (episode switch)
+  useEffect(() => {
+    const prevUrl = prevStreamUrlRef.current;
+    if (prevUrl && prevUrl !== streamUrl) {
+      console.log('[NetflixPlayer Cleanup] Stream URL changed, cleaning up previous torrent');
+      // Await cleanup to prevent race conditions
+      cleanupTorrent(prevUrl).catch(err => 
+        console.error('[NetflixPlayer Cleanup] Error during cleanup:', err)
+      );
+    }
+    prevStreamUrlRef.current = streamUrl;
+  }, [streamUrl]);
+
+  // Cleanup on component unmount (back navigation, player close)
+  useEffect(() => {
+    const beforeUnloadHandler = () => handleBeforeUnload(streamUrl);
+    
+    window.addEventListener('beforeunload', beforeUnloadHandler);
+    
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnloadHandler);
+      // Cleanup on SPA navigation or component unmount
+      cleanupTorrent(streamUrl).catch(err => 
+        console.error('[NetflixPlayer Cleanup] Error during cleanup:', err)
+      );
+    };
+  }, [streamUrl]);
 
   // Fetch Subtitles when stream URL changes
   useEffect(() => {
@@ -393,13 +425,16 @@ export default function NetflixStylePlayer({
     volumeTimeoutRef.current = setTimeout(() => setShowVolumeSlider(false), 300);
   }, []);
 
-  const handleBack = useCallback(() => {
+  const handleBack = useCallback(async () => {
+    // Cleanup torrent before closing/navigating
+    await cleanupTorrent(streamUrl);
+    
     if (onClose) {
         onClose();
     } else {
         router.back();
     }
-  }, [onClose, router]);
+  }, [onClose, router, streamUrl]);
 
   // Keyboard
   useEffect(() => {

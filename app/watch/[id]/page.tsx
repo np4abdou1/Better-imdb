@@ -4,6 +4,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { getTitleDetails, getTitleEpisodes } from '@/lib/api';
 import { useTorrentStream } from '@/lib/hooks/use-torrent';
 import { convertSubtitles } from '@/lib/srt-converter';
+import { cleanupTorrent, handleBeforeUnload } from '@/lib/cleanup-utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Play, Pause, Volume2, VolumeX, Volume1, Maximize, Minimize, 
@@ -151,24 +152,34 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     if (torrentStatus) setLastLog(torrentStatus);
   }, [torrentStatus, torrentError]);
 
-  // Cleanup server-side torrents when leaving the page
+  // Track previous streamUrl to cleanup old torrent when switching
+  const prevStreamUrlRef = useRef<string | null>(null);
+  
+  // Cleanup previous torrent when streamUrl changes (source/episode switch)
   useEffect(() => {
-    const cleanup = () => {
-      // Extract infoHash from the current magnet URL if applicable
-      if (streamUrl) {
-        const match = streamUrl.match(/magnet\/([a-fA-F0-9]{40})/);
-        if (match) {
-          // Use sendBeacon for reliable delivery during page unload
-          navigator.sendBeacon('/api/stream/cleanup', JSON.stringify({ infoHash: match[1] }));
-        }
-      }
-    };
+    const prevUrl = prevStreamUrlRef.current;
+    if (prevUrl && prevUrl !== streamUrl) {
+      console.log('[Cleanup] Stream URL changed, cleaning up previous torrent');
+      // Await cleanup to prevent race conditions
+      cleanupTorrent(prevUrl).catch(err => 
+        console.error('[Cleanup] Error during cleanup:', err)
+      );
+    }
+    prevStreamUrlRef.current = streamUrl;
+  }, [streamUrl]);
+
+  // Cleanup on component unmount (back navigation, player close)
+  useEffect(() => {
+    const beforeUnloadHandler = () => handleBeforeUnload(streamUrl);
     
-    window.addEventListener('beforeunload', cleanup);
+    window.addEventListener('beforeunload', beforeUnloadHandler);
+    
     return () => {
-      window.removeEventListener('beforeunload', cleanup);
-      // Also fire cleanup on component unmount (SPA navigation)
-      cleanup();
+      window.removeEventListener('beforeunload', beforeUnloadHandler);
+      // Cleanup on SPA navigation or component unmount
+      cleanupTorrent(streamUrl).catch(err => 
+        console.error('[Cleanup] Error during cleanup:', err)
+      );
     };
   }, [streamUrl]);
 
@@ -279,7 +290,10 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     fetchSources();
   }, [id, season, episode, loadingTitle, title]); 
 
-  const changeSource = (source: StreamSource) => {
+  const changeSource = async (source: StreamSource) => {
+    // Cleanup current torrent before switching sources
+    await cleanupTorrent(streamUrl);
+    
     setCurrentSource(source);
     setStreamUrl(source.url);
     setShowSourceSelector(false);
@@ -1075,8 +1089,10 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                   return (
                     <button
                       key={ep.id || ep.episodeNumber}
-                      onClick={() => {
+                      onClick={async () => {
                         setShowEpisodes(false);
+                        // Cleanup current torrent before switching episodes
+                        await cleanupTorrent(streamUrl);
                         router.push(`/watch/${id}?season=${season}&episode=${ep.episodeNumber}`);
                       }}
                       className={`w-full text-left px-5 py-3 flex items-start gap-3 transition-colors ${
