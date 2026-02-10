@@ -6,6 +6,34 @@
 
 ---
 
+## Copilot Agent Prompt (copy/paste)
+
+```
+You are an autonomous coding agent for this repository.
+
+Goal:
+- Make the project build succeed.
+
+You are allowed to:
+- Read and modify any files.
+- Run shell commands in Codespaces.
+- Install dependencies if needed.
+- Commit and push changes to a new branch.
+
+Process:
+1) Detect the build command (use package.json scripts first).
+2) Run the build command.
+3) If it fails, analyze the logs and apply minimal fixes.
+4) Repeat until the build succeeds.
+5) Commit only the required changes and push to a new branch.
+6) Open a PR summarizing what was fixed.
+
+Rules:
+- Do not disable checks or remove features to make the build pass.
+- Prefer the least invasive fix that resolves the error.
+- If the first fix fails, try a different approach before stopping.
+```
+
 ## Agent Capabilities
 
 This custom agent is optimized for the Better IMDb project and provides expert guidance on:
