@@ -2,15 +2,33 @@
 import { useState, useEffect, useRef, use, useMemo, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { getTitleDetails, getTitleEpisodes } from '@/lib/api';
+import { useTorrentStream } from '@/lib/hooks/use-torrent';
+import { convertSubtitles } from '@/lib/srt-converter';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Play, Pause, Volume2, VolumeX, Volume1, Maximize, Minimize, 
   ArrowLeft, RotateCcw, RotateCw, 
-  Loader2, ListVideo, X, ChevronRight
+  Loader2, ListVideo, X, ChevronRight, ChevronDown, Layers, Check, Signal, Captions,
+  HardDrive, Users, Tv
 } from 'lucide-react';
 
-const STREAM_API = '/api/stream/watch';
-const RESOLVE_API = '/api/stream/resolve';
+const RESOLVE_API = '/api/stream/resolve'; // Deprecated
+const SOURCES_API = '/api/stream/sources';
+
+export interface StreamSource {
+  id: string;
+  name: string;
+  type: 'hls' | 'mp4' | 'p2p';
+  url: string;
+  quality: string;
+  info?: string;
+  website?: string;
+  seeds?: number;
+  size?: string;
+  filename?: string;
+  codec?: string;
+  infoHash?: string;
+}
 
 // --- HELPERS ---
 
@@ -48,6 +66,12 @@ const sanitizeLog = (raw) => {
   return clean.length > 40 ? clean.slice(0, 40) : clean;
 };
 
+const formatSpeed = (bytes) => {
+  if (!bytes || bytes === 0) return '0 KB/s';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB/s';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB/s';
+};
+
 export default function WatchPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const searchParams = useSearchParams();
@@ -67,18 +91,87 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
   
   // Stream
-  const [streamUrl, setStreamUrl] = useState(null);
+  const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [resolving, setResolving] = useState(true);
   const [lastLog, setLastLog] = useState('');
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Sources
+  const [sources, setSources] = useState<StreamSource[]>([]);
+  const [currentSource, setCurrentSource] = useState<StreamSource | null>(null);
+  const [showSourceSelector, setShowSourceSelector] = useState(false);
+  
+  // Subtitles
+  const [subtitles, setSubtitles] = useState<{label: string, fileIdx: number, src: string, lang?: string, source?: string}[]>([]);
+  const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
+  const [currentSubtitle, setCurrentSubtitle] = useState(-1); // -1 = off
+  const [expandedLang, setExpandedLang] = useState<string | null>(null); // For grouped subtitle menu
   
   // Player
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const timelineRef = useRef(null);
 
+  // Hook for Torrent Playback
+  const { downloadSpeed, progress: torrentProgress, peers, status: torrentStatus, error: torrentError } = useTorrentStream(
+      videoRef,
+      streamUrl && streamUrl.startsWith('magnet:') ? streamUrl : null
+  );
+
+  // Server-side torrent stats polling (for /api/stream/magnet streaming)
+  const [serverTorrentStats, setServerTorrentStats] = useState<any>(null);
   
-  
+  useEffect(() => {
+    if (!currentSource?.infoHash || !streamUrl?.includes('/api/stream/magnet/')) {
+      setServerTorrentStats(null);
+      return;
+    }
+
+    const pollStats = async () => {
+      try {
+        const res = await fetch(`/api/stream/stats?infoHash=${currentSource.infoHash}`);
+        if (res.ok) {
+          const stats = await res.json();
+          setServerTorrentStats(stats);
+        }
+      } catch (e) {
+        // Silent fail on stats polling
+      }
+    };
+
+    // Poll every 1 second for fresh stats
+    const interval = setInterval(pollStats, 1000);
+    pollStats(); // Immediate first fetch
+
+    return () => clearInterval(interval);
+  }, [currentSource?.infoHash, streamUrl]);
+
+  useEffect(() => {
+    if (torrentError) setError(torrentError);
+    if (torrentStatus) setLastLog(torrentStatus);
+  }, [torrentStatus, torrentError]);
+
+  // Cleanup server-side torrents when leaving the page
+  useEffect(() => {
+    const cleanup = () => {
+      // Extract infoHash from the current magnet URL if applicable
+      if (streamUrl) {
+        const match = streamUrl.match(/magnet\/([a-fA-F0-9]{40})/);
+        if (match) {
+          // Use sendBeacon for reliable delivery during page unload
+          navigator.sendBeacon('/api/stream/cleanup', JSON.stringify({ infoHash: match[1] }));
+        }
+      }
+    };
+    
+    window.addEventListener('beforeunload', cleanup);
+    return () => {
+      window.removeEventListener('beforeunload', cleanup);
+      // Also fire cleanup on component unmount (SPA navigation)
+      cleanup();
+    };
+  }, [streamUrl]);
+
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
@@ -134,34 +227,123 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     fetchEpTitle();
   }, [id, season, episode, title]);
 
-  // SSE Stream resolve
+  // Fetch Sources
   useEffect(() => {
-    if (loadingTitle || error) return;
-    setResolving(true);
-    setStreamUrl(null);
-    setLastLog('Preparing playback');
+    if (loadingTitle) return;
     
-    const source = new EventSource(`${RESOLVE_API}/${id}?season=${season}&episode=${episode}`);
-    source.onmessage = (event) => {
-      if (event.data === '[DONE]') { source.close(); return; }
+    setResolving(true);
+    setError(null);
+    setSources([]);
+    setCurrentSource(null);
+    setStreamUrl(null);
+    setLastLog('Searching sources...');
+
+    const fetchSources = async () => {
       try {
-        const payload = JSON.parse(event.data);
-        if (payload.type === 'log') setLastLog(payload.message);
-        if (payload.type === 'resolved') {
-          setResolving(false);
-          setStreamUrl(`${STREAM_API}/${id}?season=${season}&episode=${episode}`);
-          source.close();
+        const type = title?.type === 'movie' ? 'movie' : 'series';
+        const query = new URLSearchParams({
+           season: String(season),
+           episode: String(episode),
+           type
+        });
+
+        const res = await fetch(`${SOURCES_API}/${id}?${query}`);
+        
+        if (!res.ok) {
+           setError('Failed to load sources');
+           setResolving(false);
+           return;
         }
-        if (payload.type === 'error') {
-          setResolving(false);
-          setError(payload.message || 'Stream unavailable');
-          source.close();
+        
+        const data = await res.json();
+        const foundSources: StreamSource[] = data.sources || [];
+        setSources(foundSources);
+
+        if (foundSources.length > 0) {
+            setLastLog(`Found ${foundSources.length} sources`);
+            const best = foundSources[0];
+            setCurrentSource(best);
+            setStreamUrl(best.url);
+            setResolving(false);
+        } else {
+            setError('No streams found for this title.');
+            setResolving(false);
         }
-      } catch (err) { console.error('SSE parse error:', err); }
+      } catch (err: any) {
+          console.error(err);
+          setError(err.message || 'Error resolving sources');
+          setResolving(false);
+      }
     };
-    source.onerror = () => source.close();
-    return () => source.close();
-  }, [id, season, episode, loadingTitle]);
+
+    fetchSources();
+  }, [id, season, episode, loadingTitle, title]); 
+
+  const changeSource = (source: StreamSource) => {
+    setCurrentSource(source);
+    setStreamUrl(source.url);
+    setShowSourceSelector(false);
+    // Reset player specific stuff if needed
+    setPlaying(true);
+  };
+
+  // Fetch Subtitles
+  useEffect(() => {
+    if (!id) return;
+    setSubtitles([]);
+    setCurrentSubtitle(-1);
+    
+    const isSeries_ = title && title.type !== 'movie';
+    const params = new URLSearchParams({ imdbId: id });
+    if (isSeries_) {
+      params.append('season', String(season));
+      params.append('episode', String(episode));
+    }
+    
+    fetch(`/api/stream/subtitles?${params}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.subtitles && data.subtitles.length > 0) {
+          const mapped = data.subtitles.map((s: any, i: number) => ({
+            fileIdx: 9000 + i,
+            label: s.label || s.lang,
+            lang: s.lang || 'unknown',
+            source: 'OpenSubtitles',
+            src: `/api/proxy/subtitles?url=${encodeURIComponent(s.url)}`
+          }));
+          setSubtitles(mapped);
+          // Auto-select Arabic if available, else English
+          const araIdx = mapped.findIndex((s: any) => s.label.toLowerCase().includes('arabic') || s.lang === 'ara');
+          const enIdx = mapped.findIndex((s: any) => s.label.toLowerCase().includes('english') || s.lang === 'eng');
+          
+          if (araIdx !== -1) setCurrentSubtitle(araIdx);
+          else if (enIdx !== -1) setCurrentSubtitle(enIdx);
+        }
+      })
+      .catch(e => console.error('[Subtitles] External fetch error:', e));
+    
+    // Also check for embedded subs if magnet source
+    if (streamUrl) {
+      const match = streamUrl.match(/magnet\/([a-fA-F0-9]{40})/);
+      if (match) {
+        const hash = match[1];
+        fetch(`/api/stream/subtitles/${hash}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.subtitles && data.subtitles.length > 0) {
+              const mapped = data.subtitles.map((s: any) => ({
+                ...s,
+                source: 'Embedded',
+                lang: s.lang || 'unknown',
+                src: `/api/stream/magnet/${hash}?fileIdx=${s.fileIdx}`
+              }));
+              setSubtitles(prev => [...prev, ...mapped]);
+            }
+          })
+          .catch(e => console.error('[Subtitles] Embedded fetch error:', e));
+      }
+    }
+  }, [id, season, episode, title, streamUrl]);
 
   // Fetch episodes for panel
   const openEpisodesPanel = useCallback(async () => {
@@ -333,6 +515,11 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   // Display log
   const displayLog = useMemo(() => sanitizeLog(lastLog), [lastLog]);
 
+  // Check if current stream is P2P
+  const isP2P = useMemo(() => {
+      return (currentSource?.type === 'p2p') || (streamUrl && streamUrl.startsWith('magnet:'));
+  }, [currentSource, streamUrl]);
+
   // Volume icon
   const VolumeIcon = useMemo(() => {
     if (muted || volume === 0) return VolumeX;
@@ -353,6 +540,17 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     return parts.join(' \u00B7 ');
   }, [title, isSeries, season, episode, episodeTitle]);
 
+  // Group subtitles by language for the grouped menu
+  const subtitleGroups = useMemo(() => {
+    const groups: Record<string, typeof subtitles> = {};
+    subtitles.forEach((sub) => {
+      const key = sub.label || sub.lang || 'Unknown';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(sub);
+    });
+    return groups;
+  }, [subtitles]);
+
   // --- RENDER ---
 
   if (loadingTitle) {
@@ -365,9 +563,17 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
   if (error) {
     return (
-      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center text-white space-y-5 font-sans">
+      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center text-white space-y-5 font-sans z-[60]">
         <p className="text-white/40 text-sm">{error}</p>
         <div className="flex gap-3">
+          {sources.length > 1 && (
+              <button 
+                onClick={() => { setError(null); setShowSourceSelector(true); }} // This might need a way to show selector without playing
+                className="px-5 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-sm font-semibold rounded-md border border-emerald-500/20 transition-colors"
+              >
+                Change Source
+              </button>
+          )}
           <button onClick={() => window.location.reload()} className="px-5 py-2 bg-white text-black text-sm font-semibold rounded-md hover:bg-zinc-200 transition-colors">
             Retry
           </button>
@@ -375,6 +581,42 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
             Go Back
           </button>
         </div>
+        
+        {/* Source List Helper when stuck in error state */}
+        {sources.length > 1 && (
+            <div className="mt-8 max-h-[50vh] overflow-y-auto w-[420px] border border-white/10 rounded-xl bg-white/5 backdrop-blur-md">
+                <p className="text-xs text-white/30 uppercase font-bold px-4 pt-3 pb-2 tracking-wider">Available Sources ({sources.length})</p>
+                <div className="pb-2">
+                {sources.map(s => (
+                    <button key={s.id} onClick={() => { setError(null); changeSource(s); }} className="w-full text-left px-4 py-3 hover:bg-white/10 transition-colors border-t border-white/5 first:border-t-0">
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                    {s.type === 'p2p' ? (
+                                        <span className="text-[8px] bg-purple-500/20 text-purple-400 border border-purple-500/30 px-1.5 py-0.5 rounded font-bold tracking-wider shrink-0">P2P</span>
+                                    ) : (
+                                        <span className="text-[8px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded font-bold tracking-wider shrink-0">{s.type.toUpperCase()}</span>
+                                    )}
+                                    {s.quality && s.quality !== 'Unknown' && (
+                                        <span className="text-[9px] bg-white/15 text-white/80 px-1.5 py-0.5 rounded font-bold">{s.quality}</span>
+                                    )}
+                                    {s.codec && (
+                                        <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${s.codec === 'HEVC' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-emerald-500/15 text-emerald-400'}`}>{s.codec}</span>
+                                    )}
+                                </div>
+                                <p className="text-xs text-white/80 font-medium truncate">{s.filename || s.name}</p>
+                                {s.website && <p className="text-[10px] text-white/30 mt-0.5">{s.website}</p>}
+                            </div>
+                            <div className="flex flex-col items-end gap-1 shrink-0">
+                                {s.size && <span className="text-[10px] text-white/50 font-mono flex items-center gap-1"><HardDrive size={10} />{s.size}</span>}
+                                {(s.seeds !== undefined && s.seeds > 0) && <span className="text-[10px] text-emerald-400/80 font-mono flex items-center gap-1"><Users size={10} />{s.seeds}</span>}
+                            </div>
+                        </div>
+                    </button>
+                ))}
+                </div>
+            </div>
+        )}
       </div>
     );
   }
@@ -406,16 +648,35 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
         <video
           ref={videoRef}
           className="w-full h-full object-contain"
-          src={streamUrl}
+          src={streamUrl && !streamUrl.startsWith('magnet:') ? streamUrl : undefined}
           autoPlay
           playsInline
+          onError={() => {
+             setError(`Playback failed for ${currentSource?.name || 'source'}`);
+          }}
           onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
           onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
           onWaiting={() => setWaiting(true)}
           onPlaying={() => { setWaiting(false); setPlaying(true); setIsPaused(false); }}
           onPause={() => setPlaying(false)}
           onEnded={() => { setPlaying(false); setShowControls(true); }}
-        />
+        >
+          {subtitles.map((sub, idx) => (
+            <track
+              key={sub.fileIdx}
+              kind="subtitles"
+              label={sub.label}
+              srcLang="en"
+              src={sub.src}
+              default={idx === currentSubtitle}
+              ref={(el) => {
+                if (el && el.track) {
+                  el.track.mode = idx === currentSubtitle ? 'showing' : 'hidden';
+                }
+              }}
+            />
+          ))}
+        </video>
       </motion.div>
 
       {/* Overlays */}
@@ -522,8 +783,26 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
               {/* Title line below timeline */}
               <div className="flex items-center justify-between mt-1 mb-2 px-0.5">
-                <span className="text-white/80 text-[13px] font-medium truncate max-w-[60%]">{titleLine}</span>
-                <span className="text-white/40 text-xs tabular-nums">{formatTime(currentTime)} / {formatTime(duration)}</span>
+                <div className="flex items-center gap-2 overflow-hidden">
+                   {isP2P && (
+                       <div className="flex items-center gap-2">
+                           <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded font-bold tracking-wider shrink-0">P2P</span>
+                           <span className="text-[10px] text-white/50 font-mono tracking-wide">
+                               {serverTorrentStats ? (
+                                   <>
+                                       {serverTorrentStats.numPeers} peers • {formatSpeed(serverTorrentStats.downloadSpeed)} • {(serverTorrentStats.progress * 100).toFixed(0)}%
+                                   </>
+                               ) : (
+                                   <>
+                                       {peers} peers • {formatSpeed(downloadSpeed)} • {(torrentProgress * 100).toFixed(0)}%
+                                   </>
+                               )}
+                           </span>
+                       </div>
+                    )}
+                   <span className="text-white/80 text-[13px] font-medium truncate">{titleLine}</span>
+                </div>
+                <span className="text-white/40 text-xs tabular-nums shrink-0 ml-2">{formatTime(currentTime)} / {formatTime(duration)}</span>
               </div>
 
               {/* Controls Row */}
@@ -574,6 +853,171 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
                 {/* Right */}
                 <div className="flex items-center gap-4">
+                  
+                  {/* Subtitles / CC */}
+                  <div className="relative">
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); setShowSubtitleMenu(!showSubtitleMenu); setShowSourceSelector(false); }}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${currentSubtitle !== -1 ? 'text-white bg-white/10' : 'text-white/60 hover:text-white'}`}
+                      title="Subtitles"
+                    >
+                      <Captions size={20} strokeWidth={currentSubtitle !== -1 ? 2.5 : 1.5} />
+                      <span className="text-[11px] font-bold">CC</span>
+                    </button>
+
+                    <AnimatePresence>
+                      {showSubtitleMenu && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 8 }}
+                          className="absolute bottom-full right-0 mb-3 w-64 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="p-3 border-b border-white/10 bg-white/5">
+                            <h4 className="text-xs font-bold text-white/90 uppercase tracking-wider">Subtitles</h4>
+                          </div>
+                          <div className="max-h-[280px] overflow-y-auto py-1 scrollbar-thin scrollbar-thumb-white/10">
+                            <button
+                              onClick={() => { setCurrentSubtitle(-1); setShowSubtitleMenu(false); }}
+                              className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${currentSubtitle === -1 ? 'text-white' : 'text-zinc-400'}`}
+                            >
+                              <span>Off</span>
+                              {currentSubtitle === -1 && <Check size={14} className="text-emerald-400" />}
+                            </button>
+                            {subtitles.length === 0 ? (
+                              <div className="px-4 py-3 text-xs text-white/30 italic text-center">Searching...</div>
+                            ) : (
+                              Object.entries(subtitleGroups).map(([lang, subs]) => {
+                                const hasMultiple = subs.length > 1;
+                                const isExpanded = expandedLang === lang;
+                                // Check if any subtitle in this group is the active one
+                                const activeSubInGroup = subs.some(sub => {
+                                  const globalIdx = subtitles.findIndex(s => s.fileIdx === sub.fileIdx);
+                                  return globalIdx === currentSubtitle;
+                                });
+                                
+                                if (!hasMultiple) {
+                                  // Single subtitle for this language - show directly
+                                  const sub = subs[0];
+                                  const globalIdx = subtitles.findIndex(s => s.fileIdx === sub.fileIdx);
+                                  return (
+                                    <button
+                                      key={sub.fileIdx}
+                                      onClick={() => { setCurrentSubtitle(globalIdx); setShowSubtitleMenu(false); }}
+                                      className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${currentSubtitle === globalIdx ? 'text-white' : 'text-zinc-400'}`}
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <span className="truncate">{lang}</span>
+                                        {sub.source && <span className="text-[8px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 font-bold shrink-0">{sub.source}</span>}
+                                      </div>
+                                      {currentSubtitle === globalIdx && <Check size={14} className="text-emerald-400 shrink-0" />}
+                                    </button>
+                                  );
+                                }
+
+                                // Multiple subtitles for this language - show expandable group
+                                return (
+                                  <div key={lang}>
+                                    <button
+                                      onClick={() => setExpandedLang(isExpanded ? null : lang)}
+                                      className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${activeSubInGroup ? 'text-white' : 'text-zinc-400'}`}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <span>{lang}</span>
+                                        <span className="text-[9px] text-white/30 font-mono">{subs.length}</span>
+                                      </div>
+                                      <div className="flex items-center gap-1">
+                                        {activeSubInGroup && <Check size={12} className="text-emerald-400" />}
+                                        <ChevronDown size={14} className={`text-white/30 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                      </div>
+                                    </button>
+                                    {isExpanded && (
+                                      <div className="bg-white/[0.03]">
+                                        {subs.map((sub, i) => {
+                                          const globalIdx = subtitles.findIndex(s => s.fileIdx === sub.fileIdx);
+                                          return (
+                                            <button
+                                              key={sub.fileIdx}
+                                              onClick={() => { setCurrentSubtitle(globalIdx); setShowSubtitleMenu(false); setExpandedLang(null); }}
+                                              className={`w-full text-left pl-8 pr-4 py-2 text-xs flex items-center justify-between hover:bg-white/5 transition-colors ${currentSubtitle === globalIdx ? 'text-white' : 'text-zinc-500'}`}
+                                            >
+                                              <div className="flex items-center gap-2 min-w-0">
+                                                <span className="truncate">Track {i + 1}</span>
+                                                {sub.source && <span className="text-[7px] px-1 py-0.5 rounded bg-white/10 text-white/40 font-bold shrink-0">{sub.source}</span>}
+                                              </div>
+                                              {currentSubtitle === globalIdx && <Check size={12} className="text-emerald-400 shrink-0" />}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+
+                  {/* Source Selector */}
+                  {sources.length > 0 && (
+                    <div className="relative">
+                       <button 
+                         onClick={(e) => { e.stopPropagation(); setShowSourceSelector(!showSourceSelector); }}
+                         className="flex items-center gap-2 text-white/80 hover:text-white transition-colors text-sm font-medium"
+                       >
+                         <Layers size={20} />
+                         <span className="hidden md:inline">{currentSource?.name || 'Sources'}</span>
+                       </button>
+
+                       {showSourceSelector && (
+                           <div 
+                             className="absolute bottom-full right-0 mb-3 w-72 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50 flex flex-col max-h-[22rem]" 
+                             onClick={e => e.stopPropagation()}
+                           >
+                                <div className="p-3 border-b border-white/10 bg-white/5 flex items-center gap-2">
+                                    <Signal size={12} className="text-white/60" />
+                                    <h4 className="text-xs font-bold text-white/90 uppercase tracking-wider">Select Source</h4>
+                                    <span className="text-[9px] text-white/30 ml-auto">{sources.length}</span>
+                                </div>
+                                <div className="overflow-y-auto py-1 scrollbar-thin scrollbar-thumb-white/10">
+                                    {sources.map(s => (
+                                        <button
+                                            key={s.id}
+                                            onClick={() => { changeSource(s); setShowSourceSelector(false); }}
+                                            className={`w-full text-left px-3 py-2.5 flex flex-col gap-1 hover:bg-white/5 transition-colors border-b border-white/[0.04] last:border-0 ${currentSource?.id === s.id ? 'bg-white/10' : ''}`}
+                                        >
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <span className={`text-[8px] px-1 py-0.5 rounded font-bold ${s.type === 'p2p' ? 'bg-purple-500/20 text-purple-300' : 'bg-sky-500/20 text-sky-300'}`}>
+                                                {s.type === 'p2p' ? 'P2P' : 'HLS'}
+                                              </span>
+                                              {s.quality && <span className="text-[8px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">{s.quality}</span>}
+                                              {s.codec && (
+                                                <span className={`text-[8px] px-1 py-0.5 rounded font-bold ${s.codec === 'HEVC' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-white/10 text-white/50'}`}>{s.codec}</span>
+                                              )}
+                                              {currentSource?.id === s.id && <Check size={11} className="text-emerald-400 ml-auto shrink-0" />}
+                                            </div>
+                                            {s.filename ? (
+                                              <span className="text-[10px] text-white/70 truncate leading-tight">{s.filename}</span>
+                                            ) : (
+                                              <span className="text-[10px] text-white/50 truncate leading-tight">{s.name}</span>
+                                            )}
+                                            <div className="flex items-center gap-3 text-[9px] text-white/30">
+                                              {s.seeds != null && <span className="flex items-center gap-0.5"><Users size={9} /> {s.seeds}</span>}
+                                              {s.size && <span className="flex items-center gap-0.5"><HardDrive size={9} /> {s.size}</span>}
+                                              {s.info && <span className="truncate">{s.info}</span>}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                           </div>
+                       )}
+                    </div>
+                  )}
+
                   {isSeries && (
                     <button 
                       onClick={(e) => { e.stopPropagation(); openEpisodesPanel(); }}

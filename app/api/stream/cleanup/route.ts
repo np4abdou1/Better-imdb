@@ -1,0 +1,23 @@
+// Fix for connection limit / ghost streams
+import { NextRequest, NextResponse } from 'next/server';
+import { destroyTorrent, destroyAllTorrents } from '@/lib/magnet-service';
+
+export async function POST(request: NextRequest) {
+    try {
+        const body = await request.json().catch(() => ({}));
+        const { infoHash, all } = body;
+        
+        if (all) {
+            destroyAllTorrents();
+            return NextResponse.json({ ok: true, message: 'All torrents destroyed' });
+        }
+        
+        if (!infoHash) return new NextResponse('Missing infoHash', { status: 400 });
+
+        destroyTorrent(infoHash);
+        
+        return NextResponse.json({ ok: true });
+    } catch (e) {
+        return new NextResponse('Error', { status: 500 });
+    }
+}

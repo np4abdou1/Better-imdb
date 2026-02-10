@@ -44,7 +44,8 @@ export async function GET(request, props) {
           return;
         }
 
-        send({ type: 'resolved' });
+        // Pass the actual stream URL so frontend can extract hash
+        send({ type: 'resolved', streamUrl: streamData.streamUrl });
       } catch (error) {
         send({
           type: 'error',

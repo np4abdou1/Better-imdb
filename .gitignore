@@ -59,5 +59,11 @@ better-imdb.db*
 *.log
 /logs/
 
+# unused and external repos
+/torrent_analytics/
+/copilot-api/
+/cenima-cli/
+/backup/
+
 # OS files
 Thumbs.db

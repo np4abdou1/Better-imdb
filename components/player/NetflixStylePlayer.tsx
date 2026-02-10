@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Play, Pause, Volume2, VolumeX, Volume1, Maximize, Minimize, 
   ArrowLeft, RotateCcw, RotateCw, 
-  Loader2, ListVideo, X, AlertCircle
+  Loader2, ListVideo, X, AlertCircle, Captions
 } from 'lucide-react';
 import { Title } from '@/types';
 
@@ -67,6 +67,9 @@ export default function NetflixStylePlayer({
 }: NetflixStylePlayerProps) {
   const router = useRouter();
   
+  // Is a series?
+  const isSeries = useMemo(() => title && title.type !== 'movie' && title.type !== 'tvMovie', [title]);
+
   // Use state for season/episode to allow internal switching
   const [season, setSeason] = useState<number>(initialSeason);
   const [episode, setEpisode] = useState<number>(initialEpisode);
@@ -78,6 +81,11 @@ export default function NetflixStylePlayer({
   const [episodes, setEpisodes] = useState<any[]>([]); // Using any[] for now as Episode type isn't fully defined in context
   const [loadingEpisodes, setLoadingEpisodes] = useState<boolean>(false);
   
+  // Subtitles
+  const [subtitles, setSubtitles] = useState<{label: string, fileIdx: number, src: string}[]>([]);
+  const [showSubtitleMenu, setShowSubtitleMenu] = useState<boolean>(false);
+  const [currentSubtitle, setCurrentSubtitle] = useState<number | -1>(-1); // -1 = off
+
   // Stream
   const [streamUrl, setStreamUrl] = useState<string | null>(propStreamUrl || null);
   const [resolving, setResolving] = useState<boolean>(!propStreamUrl);
@@ -160,7 +168,12 @@ export default function NetflixStylePlayer({
         if (payload.type === 'log') setLastLog(payload.message);
         if (payload.type === 'resolved') {
           setResolving(false);
-          setStreamUrl(`${STREAM_API}/${title.id}?season=${season}&episode=${episode}`);
+          // If we have an infohash in the payload, prefer it!
+          if (payload.streamUrl) {
+               setStreamUrl(payload.streamUrl);
+          } else {
+               setStreamUrl(`${STREAM_API}/${title.id}?season=${season}&episode=${episode}`);
+          }
           source.close();
         }
         if (payload.type === 'error') {
@@ -177,6 +190,68 @@ export default function NetflixStylePlayer({
     };
     return () => source.close();
   }, [title.id, season, episode, propStreamUrl]);
+
+  // Fetch Subtitles when stream URL changes
+  useEffect(() => {
+        setSubtitles([]);
+        setCurrentSubtitle(-1);
+        
+        // Strategy 1: Fetch from OpenSubtitles via IMDB ID (Best for MKV/Torrents without embedded)
+        if (title.id) {
+            const params = new URLSearchParams({ imdbId: title.id });
+            if (isSeries) {
+                params.append('season', season.toString());
+                params.append('episode', episode.toString());
+            }
+            
+            fetch(`/api/stream/subtitles?${params}`)
+                .then(res => res.json())
+                .then(data => {
+                     if (data.subtitles && data.subtitles.length > 0) {
+                         const mapped = data.subtitles.map((s: any, i: number) => ({
+                             fileIdx: 9999 + i, 
+                             label: s.label || s.lang,
+                             // Use proxy to avoid CORS and auto-convert SRT->VTT
+                             src: `/api/proxy/subtitles?url=${encodeURIComponent(s.url)}`
+                         }));
+                         
+                         setSubtitles(prev => {
+                             return mapped;
+                         });
+                         
+                         const enIndex = mapped.findIndex((s: any) => s.label.toLowerCase().includes('english'));
+                         if (enIndex !== -1) setCurrentSubtitle(enIndex);
+                     }
+                })
+                .catch(e => console.error('External Subs Error:', e));
+        }
+
+        if (!streamUrl) return;
+
+        // Strategy 2: Fetch embedded subtitles (SRT files inside torrent)
+        // Extract InfoHash if it's our magnet API
+        const match = streamUrl.match(/magnet\/([a-fA-F0-9]{40})/);
+        if (match) {
+            const hash = match[1];
+             fetch(`/api/stream/subtitles/${hash}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.subtitles) {
+                    const mapped = data.subtitles.map((s: any) => ({
+                        ...s,
+                        src: `/api/stream/magnet/${hash}?fileIdx=${s.fileIdx}`
+                    }));
+                    
+                    setSubtitles(prev => {
+                        // Avoid duplicates if logic allows, for now just append
+                        return [...prev, ...mapped];
+                    });
+                }
+            })
+            .catch(err => console.error('Embedded Subs Error:', err));
+        }
+
+  }, [title.id, season, episode, isSeries, streamUrl]);
 
   // Fetch episodes for panel
   const openEpisodesPanel = useCallback(async () => {
@@ -367,9 +442,6 @@ export default function NetflixStylePlayer({
     return Volume2;
   }, [muted, volume]);
 
-  // Is a series?
-  const isSeries = title && title.type !== 'movie' && title.type !== 'tvMovie';
-
   // Build title line string
   const titleLine = useMemo(() => {
     if (!title) return '';
@@ -467,7 +539,24 @@ export default function NetflixStylePlayer({
           onPlaying={() => { setWaiting(false); setPlaying(true); setIsPaused(false); }}
           onPause={() => setPlaying(false)}
           onEnded={() => { setPlaying(false); setShowControls(true); }}
-        />
+        >
+            {subtitles.map((sub, idx) => (
+                <track
+                    key={sub.fileIdx}
+                    kind="subtitles"
+                    label={sub.label}
+                    srcLang="en"
+                    src={sub.src}
+                    default={idx === currentSubtitle}
+                    ref={el => {
+                         // Manually toggle mode because React 'default' prop only works on mount
+                         if (el && el.track) {
+                             el.track.mode = (idx === currentSubtitle) ? 'showing' : 'hidden';
+                         }
+                    }}
+                />
+            ))}
+        </video>
       </motion.div>
 
       {/* Overlays */}
@@ -628,6 +717,61 @@ export default function NetflixStylePlayer({
                              style={{ left: `calc(${volume * 100}% - 6px)` }} />
                       </div>
                     </div>
+                  </div>
+
+                    {/* Subtitles (Moved to Left Group) */}
+                    <div className="relative border-l border-white/20 pl-4 ml-2 shrink-0">
+                      <button 
+                      onClick={(e) => { e.stopPropagation(); setShowSubtitleMenu(!showSubtitleMenu); }}
+                      className={`flex items-center gap-2 px-2 py-1 rounded hover:bg-white/10 transition-colors min-w-[44px] ${showSubtitleMenu || currentSubtitle !== -1 ? 'text-white' : 'text-white/80'}`}
+                      title="Subtitles / Audio"
+                      aria-label="Subtitles"
+                      >
+                        <Captions size={22} strokeWidth={currentSubtitle !== -1 ? 2.5 : 1.5} />
+                        <span className="text-[11px] font-bold tracking-wide">CC</span>
+                        {currentSubtitle !== -1 && (
+                          <span className="text-[10px] font-bold bg-white text-black px-1 rounded">ON</span>
+                        )}
+                      </button>
+                      
+                      <AnimatePresence>
+                          {showSubtitleMenu && (
+                              <motion.div
+                                  initial={{ opacity: 0, y: 10 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  exit={{ opacity: 0, y: 10 }}
+                                  className="absolute bottom-full left-0 mb-4 w-64 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-lg overflow-hidden shadow-xl z-50 flex flex-col py-1"
+                              >
+                                  <div className="px-4 py-2 border-b border-white/10 mb-1">
+                                      <h4 className="text-xs font-bold text-white/50 uppercase tracking-wider">Subtitles</h4>
+                                  </div>
+                                  
+                                  {subtitles.length === 0 ? (
+                                      <div className="px-4 py-3 text-sm text-white/40 italic text-center">
+                                          Searching for subtitles...
+                                      </div>
+                                  ) : (
+                                      <div className="max-h-[200px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/20">
+                                          <button
+                                              onClick={() => { setCurrentSubtitle(-1); setShowSubtitleMenu(false); }}
+                                              className={`w-full px-4 py-2 text-left text-sm hover:bg-white/10 transition-colors ${currentSubtitle === -1 ? 'text-emerald-400 font-medium' : 'text-white/70'}`}
+                                          >
+                                              Off
+                                          </button>
+                                          {subtitles.map((sub, idx) => (
+                                              <button
+                                                  key={sub.fileIdx}
+                                                  onClick={() => { setCurrentSubtitle(idx); setShowSubtitleMenu(false); }}
+                                                  className={`w-full px-4 py-2 text-left text-sm hover:bg-white/10 transition-colors truncate ${currentSubtitle === idx ? 'text-emerald-400 font-medium' : 'text-white/70'}`}
+                                              >
+                                                  {sub.label}
+                                              </button>
+                                          ))}
+                                      </div>
+                                  )}
+                              </motion.div>
+                          )}
+                      </AnimatePresence>
                   </div>
                 </div>
 

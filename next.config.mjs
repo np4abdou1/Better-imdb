@@ -81,7 +81,12 @@ const nextConfig = {
   },
 
   // External packages that should not be bundled (need filesystem access)
-  serverExternalPackages: ['got-scraping', 'header-generator'],
+  serverExternalPackages: ['got-scraping', 'header-generator', 'webtorrent', 'utp-native', 'node-datachannel'],
+
+  // Ensure these are treated as loose files
+  outputFileTracingIncludes: {
+    '/api/stream/magnet/**': ['./node_modules/node-datachannel/build/Release/*.node'],
+  },
 
   // Experimental features for better performance
   experimental: {
