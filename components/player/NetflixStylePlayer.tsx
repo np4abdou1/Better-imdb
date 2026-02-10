@@ -191,6 +191,74 @@ export default function NetflixStylePlayer({
     return () => source.close();
   }, [title.id, season, episode, propStreamUrl]);
 
+  // Helper function to extract infoHash from various URL formats
+  const extractInfoHash = (url: string | null): string | null => {
+    if (!url) return null;
+    
+    // Format 1: /api/stream/magnet/[hash]
+    const apiMatch = url.match(/\/api\/stream\/magnet\/([a-fA-F0-9]{40})/);
+    if (apiMatch) return apiMatch[1];
+    
+    // Format 2: magnet:?xt=urn:btih:[hash]
+    const magnetMatch = url.match(/magnet:\?xt=urn:btih:([a-fA-F0-9]{40})/i);
+    if (magnetMatch) return magnetMatch[1];
+    
+    return null;
+  };
+
+  // Cleanup server-side torrents - called before navigation or on unmount
+  const cleanupTorrent = async (url: string | null) => {
+    const infoHash = extractInfoHash(url);
+    if (!infoHash) return;
+    
+    console.log('[NetflixPlayer Cleanup] Destroying torrent:', infoHash.substring(0, 8) + '...');
+    
+    try {
+      // Use fetch for SPA navigation (more reliable than sendBeacon for cleanup)
+      await fetch('/api/stream/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ infoHash }),
+        keepalive: true // Ensures request completes even if page unloads
+      });
+    } catch (e) {
+      // Fallback to sendBeacon for page unload
+      navigator.sendBeacon('/api/stream/cleanup', JSON.stringify({ infoHash }));
+    }
+  };
+
+  // Track previous streamUrl to cleanup old torrent when switching
+  const prevStreamUrlRef = useRef<string | null>(null);
+  
+  // Cleanup previous torrent when streamUrl changes (episode switch)
+  useEffect(() => {
+    const prevUrl = prevStreamUrlRef.current;
+    if (prevUrl && prevUrl !== streamUrl) {
+      console.log('[NetflixPlayer Cleanup] Stream URL changed, cleaning up previous torrent');
+      cleanupTorrent(prevUrl);
+    }
+    prevStreamUrlRef.current = streamUrl;
+  }, [streamUrl]);
+
+  // Cleanup on component unmount (back navigation, player close)
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const infoHash = extractInfoHash(streamUrl);
+      if (infoHash) {
+        // Use sendBeacon for page unload (most reliable in this context)
+        navigator.sendBeacon('/api/stream/cleanup', JSON.stringify({ infoHash }));
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      // Cleanup on SPA navigation or component unmount
+      cleanupTorrent(streamUrl);
+    };
+  }, [streamUrl]);
+
   // Fetch Subtitles when stream URL changes
   useEffect(() => {
         setSubtitles([]);
@@ -393,13 +461,16 @@ export default function NetflixStylePlayer({
     volumeTimeoutRef.current = setTimeout(() => setShowVolumeSlider(false), 300);
   }, []);
 
-  const handleBack = useCallback(() => {
+  const handleBack = useCallback(async () => {
+    // Cleanup torrent before closing/navigating
+    await cleanupTorrent(streamUrl);
+    
     if (onClose) {
         onClose();
     } else {
         router.back();
     }
-  }, [onClose, router]);
+  }, [onClose, router, streamUrl]);
 
   // Keyboard
   useEffect(() => {
