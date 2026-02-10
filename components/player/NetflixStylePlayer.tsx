@@ -263,12 +263,12 @@ export default function NetflixStylePlayer({
                 .then(data => {
                      if (data.subtitles && data.subtitles.length > 0) {
                          const mapped = data.subtitles.map((s: any, i: number) => ({
-                              fileIdx: 9999 + i, 
-                              label: s.label || s.lang,
-                              lang: s.lang,
-                              // Use proxy to avoid CORS and auto-convert SRT->VTT
-                              src: `/api/proxy/subtitles?url=${encodeURIComponent(s.url)}`
-                          }));
+                             fileIdx: 9999 + i, 
+                             label: s.label || s.lang,
+                             lang: s.lang,
+                             // Use proxy to avoid CORS and auto-convert SRT->VTT
+                             src: `/api/proxy/subtitles?url=${encodeURIComponent(s.url)}`
+                         }));
                          
                          setSubtitles(prev => {
                              return mapped;
@@ -314,6 +314,7 @@ export default function NetflixStylePlayer({
     if (!video) return;
     const tracks = Array.from(video.textTracks || []) as TextTrack[];
     tracks.forEach((track, idx) => {
+      // Keep track hidden so cues load but the browser doesn't render them (custom overlay handles display).
       track.mode = idx === currentSubtitle ? 'hidden' : 'disabled';
     });
 

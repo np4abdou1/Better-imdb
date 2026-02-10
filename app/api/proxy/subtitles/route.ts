@@ -7,7 +7,9 @@ const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 let subtitleQueue: Promise<void> = Promise.resolve();
 
 const queueSubtitleFetch = async <T>(task: () => Promise<T>): Promise<T> => {
-    const run = subtitleQueue.then(task, task);
+    const run = subtitleQueue
+        .catch(() => undefined)
+        .then(() => task());
     subtitleQueue = run.then(() => undefined, () => undefined);
     return run;
 };

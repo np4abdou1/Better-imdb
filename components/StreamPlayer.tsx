@@ -104,7 +104,12 @@ export default function StreamPlayer({
   };
 
   const changeSource = async (source: StreamSource) => {
-      await cleanupTorrent(currentSource?.url || null);
+      const cleanupUrl = currentSource?.url || (
+          currentSource?.type === 'p2p' && currentSource.id.startsWith('torrentio-')
+              ? `/api/stream/magnet/${currentSource.id.replace('torrentio-', '')}`
+              : null
+      );
+      await cleanupTorrent(cleanupUrl);
 
       setCurrentSource(source);
       setLoading(true);
@@ -116,11 +121,16 @@ export default function StreamPlayer({
 
   // Cleanup on unmount
   useEffect(() => {
-        const beforeUnloadHandler = () => handleBeforeUnload(currentSource?.url || null);
+        const cleanupUrl = currentSource?.url || (
+            currentSource?.type === 'p2p' && currentSource.id.startsWith('torrentio-')
+                ? `/api/stream/magnet/${currentSource.id.replace('torrentio-', '')}`
+                : null
+        );
+        const beforeUnloadHandler = () => handleBeforeUnload(cleanupUrl);
         window.addEventListener('beforeunload', beforeUnloadHandler);
         return () => {
             window.removeEventListener('beforeunload', beforeUnloadHandler);
-            cleanupTorrent(currentSource?.url || null).catch(() => {});
+            cleanupTorrent(cleanupUrl).catch(() => {});
         };
   }, [currentSource]);
 

@@ -386,6 +386,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     if (!video) return;
     const tracks = Array.from(video.textTracks || []) as TextTrack[];
     tracks.forEach((track, idx) => {
+      // Keep track hidden so cues load but the browser doesn't render them (custom overlay handles display).
       track.mode = idx === currentSubtitle ? 'hidden' : 'disabled';
     });
 
@@ -950,7 +951,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                   <div className="relative">
                     <button 
                       onClick={(e) => { e.stopPropagation(); setShowSubtitleMenu(!showSubtitleMenu); setShowSourceSelector(false); }}
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors hover:bg-white/10 ${currentSubtitle !== -1 ? 'text-white bg-white/10' : 'text-white/60 hover:text-white'}`}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${currentSubtitle !== -1 ? 'text-white bg-white/10' : 'text-white/60 hover:text-white hover:bg-white/10'}`}
                       title="Subtitles"
                     >
                       <Captions size={20} strokeWidth={currentSubtitle !== -1 ? 2.5 : 1.5} />
