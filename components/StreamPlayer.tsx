@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, WarningCircle, List, Check } from '@phosphor-icons/react';
 import { Title } from '@/types';
 import { StreamSource } from '@/lib/torrentio'; // We need this type, or redefine
+import { cleanupTorrent, handleBeforeUnload } from '@/lib/cleanup-utils';
 
 export interface StreamPlayerProps {
   title: Title;
@@ -103,11 +104,12 @@ export default function StreamPlayer({
   };
 
   const changeSource = async (source: StreamSource) => {
-      // Cleanup previous if it was magnet
-      if (currentSource?.type === 'p2p' && currentSource.id.startsWith('torrentio-')) {
-          const hash = currentSource.id.replace('torrentio-', '');
-          try { await fetch('/api/stream/cleanup', { method: 'POST', body: JSON.stringify({ infoHash: hash }) }); } catch(e) {}
-      }
+      const cleanupUrl = currentSource?.url || (
+          currentSource?.type === 'p2p' && currentSource.id.startsWith('torrentio-')
+              ? `/api/stream/magnet/${currentSource.id.replace('torrentio-', '')}`
+              : null
+      );
+      await cleanupTorrent(cleanupUrl);
 
       setCurrentSource(source);
       setLoading(true);
@@ -119,11 +121,16 @@ export default function StreamPlayer({
 
   // Cleanup on unmount
   useEffect(() => {
+        const cleanupUrl = currentSource?.url || (
+            currentSource?.type === 'p2p' && currentSource.id.startsWith('torrentio-')
+                ? `/api/stream/magnet/${currentSource.id.replace('torrentio-', '')}`
+                : null
+        );
+        const beforeUnloadHandler = () => handleBeforeUnload(cleanupUrl);
+        window.addEventListener('beforeunload', beforeUnloadHandler);
         return () => {
-            if (currentSource?.type === 'p2p' && currentSource.id.startsWith('torrentio-')) {
-                const hash = currentSource.id.replace('torrentio-', '');
-                navigator.sendBeacon('/api/stream/cleanup', JSON.stringify({ infoHash: hash }));
-            }
+            window.removeEventListener('beforeunload', beforeUnloadHandler);
+            cleanupTorrent(cleanupUrl).catch(() => {});
         };
   }, [currentSource]);
 
