@@ -88,6 +88,10 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
         normalizedName.includes('hevc') ||
         normalizedName.includes('x265');
 
+      const isAv1 =
+        normalizedName.includes('av1') ||
+        /\bav1\b/i.test(combinedText);
+
       const isH264 =
         normalizedName.includes('h.264') ||
         normalizedName.includes('avc') ||
@@ -131,6 +135,8 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
       let score = seeds;
       if (isH264) score += 10000; // Major boost for compatibility
       if (!isHevc) score += 5000; // Boost for NOT being HEVC
+      if (isHevc) score -= 6000;
+      if (isAv1) score -= 9000;
       if (isMp4Container) score += 3500; // MP4 + H264 is most browser-friendly
       if (isMkvContainer) score += 300; // Keep MKV usable, but lower preference
       if (quality === '1080p') score += 2000; // Sweet spot

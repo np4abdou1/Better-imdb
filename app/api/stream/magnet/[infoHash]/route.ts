@@ -80,6 +80,8 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
 
             const stream = file.createReadStream({ start, end, highWaterMark: 256 * 1024 } as any); 
             const requestStart = Date.now();
+            let bytesSent = 0;
+            let lastStatUpdate = requestStart;
 
             const abortHandler = () => {
                 try { (stream as any).destroy(); } catch (e) {}
@@ -92,6 +94,12 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
                 start(controller) {
                     stream.on('data', chunk => {
                          try {
+                             bytesSent += chunk.length;
+                             const now = Date.now();
+                             if (now - lastStatUpdate >= 800) {
+                                recordTorrentDelivery(infoHash, bytesSent, Math.max(1, now - requestStart));
+                                lastStatUpdate = now;
+                             }
                              // console.log(`[StreamAPI] Pushing chunk: ${chunk.length} bytes`);
                              controller.enqueue(chunk);
                              // Check backpressure
@@ -104,7 +112,7 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
                     });
                     stream.on('end', () => {
                         const elapsed = Date.now() - requestStart;
-                        recordTorrentDelivery(infoHash, chunksize, elapsed);
+                        recordTorrentDelivery(infoHash, Math.max(bytesSent, chunksize), elapsed);
                         request.signal.removeEventListener('abort', abortHandler);
                         try { controller.close(); } catch(e) {}
                     });

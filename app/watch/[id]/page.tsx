@@ -236,6 +236,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   // Volume slider state for proper drag handling
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const volumeTimeoutRef = useRef(null);
+  const autoFallbackTriedRef = useRef<Set<string>>(new Set());
 
   // Keep media element audio state in sync when switching sources (TopCinema <-> Torrent)
   useEffect(() => {
@@ -350,6 +351,53 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     // Reset player specific stuff if needed
     setPlaying(true);
   };
+
+  const isLikelyIncompatibleSource = useCallback((source?: StreamSource | null) => {
+    if (!source) return false;
+    const codec = (source.codec || '').toLowerCase();
+    const audio = (source.audioCodec || '').toLowerCase();
+    const file = (source.filename || '').toLowerCase();
+    const info = (source.info || '').toLowerCase();
+
+    const hasHevc = codec.includes('hevc') || file.includes('x265') || file.includes('h265') || info.includes('hevc');
+    const hasAv1 = file.includes('av1') || info.includes('av1') || codec.includes('av1');
+    const riskyAudio = audio.includes('eac3') || audio.includes('dts') || audio.includes('truehd');
+
+    return hasHevc || hasAv1 || riskyAudio;
+  }, []);
+
+  const findFallbackSource = useCallback((failed?: StreamSource | null): StreamSource | null => {
+    if (!failed || sources.length <= 1) return null;
+
+    const candidates = sources.filter((s) => s.id !== failed.id);
+    if (!candidates.length) return null;
+
+    const nonRisky = candidates.find((s) => !isLikelyIncompatibleSource(s));
+    if (nonRisky) return nonRisky;
+
+    const topCinema = candidates.find((s) => s.id === 'topcinema' || s.website === 'TopCinema');
+    if (topCinema) return topCinema;
+
+    return candidates[0] || null;
+  }, [sources, isLikelyIncompatibleSource]);
+
+  const attemptAutoFallback = useCallback(async (reason: string) => {
+    const current = currentSource;
+    if (!current) return;
+
+    if (autoFallbackTriedRef.current.has(current.id)) return;
+    autoFallbackTriedRef.current.add(current.id);
+
+    const fallback = findFallbackSource(current);
+    if (!fallback) return;
+
+    setLastLog(`Source issue detected (${reason}), switching source...`);
+    await changeSource(fallback);
+  }, [currentSource, findFallbackSource, changeSource]);
+
+  useEffect(() => {
+    autoFallbackTriedRef.current.clear();
+  }, [id, season, episode]);
 
   // Fetch Subtitles
   useEffect(() => {
@@ -802,7 +850,15 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
           onError={() => {
              setError(`Playback failed for ${currentSource?.name || 'source'}`);
           }}
-          onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
+          onTimeUpdate={() => {
+            const v = videoRef.current;
+            setCurrentTime(v?.currentTime || 0);
+
+            if (!v) return;
+            if ((v.currentTime || 0) > 2 && (v.videoWidth || 0) === 0) {
+              attemptAutoFallback('black-screen');
+            }
+          }}
           onLoadedMetadata={() => {
             const video = videoRef.current;
             setDuration(video?.duration || 0);
@@ -814,6 +870,14 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
               video.volume = nextVolume;
               if (volume <= 0) setVolume(nextVolume);
             }
+
+            window.setTimeout(() => {
+              const v = videoRef.current;
+              if (!v || v.paused) return;
+              if ((v.videoWidth || 0) === 0 && (v.currentTime || 0) >= 0.3) {
+                attemptAutoFallback('no-video-track');
+              }
+            }, 1200);
           }}
           onWaiting={() => setWaiting(true)}
           onPlaying={() => { setWaiting(false); setPlaying(true); setIsPaused(false); }}
