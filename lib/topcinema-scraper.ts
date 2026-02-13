@@ -10,8 +10,9 @@ import type { CheerioAPI } from 'cheerio';
 
 // Configuration
 const BASE_URL = 'https://topcinema.rip';
-const REQUEST_TIMEOUT = 20000; // 20 seconds
-const RETRY_ATTEMPTS = 3;
+const REQUEST_TIMEOUT = Number(process.env.TOPCINEMA_TIMEOUT_MS || 45000); // 45 seconds default
+const SERIES_DETAILS_TIMEOUT = Number(process.env.TOPCINEMA_SERIES_TIMEOUT_MS || 65000);
+const RETRY_ATTEMPTS = Number(process.env.TOPCINEMA_RETRY_ATTEMPTS || 4);
 
 const DEFAULT_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -377,10 +378,30 @@ export class TopCinemaScraper {
    */
   private async getSeriesDetails(url: string, showType: 'series' | 'anime' = 'series'): Promise<ShowDetails | null> {
     try {
-      const response = await gotScraping(url, {
-        headers: DEFAULT_HEADERS,
-        timeout: { request: REQUEST_TIMEOUT }
-      });
+      let response: any = null;
+      let lastError: any = null;
+
+      const safeUrl = /[^\x00-\x7F]/.test(url) ? encodeURI(url) : url;
+
+      for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
+        try {
+          response = await gotScraping(safeUrl, {
+            headers: DEFAULT_HEADERS,
+            timeout: { request: SERIES_DETAILS_TIMEOUT + attempt * 10000 },
+            retry: { limit: 1 },
+          });
+          break;
+        } catch (error: any) {
+          lastError = error;
+          if (attempt < RETRY_ATTEMPTS - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+          }
+        }
+      }
+
+      if (!response) {
+        throw lastError || new Error('Series details request failed');
+      }
 
       const $ = cheerio.load(response.body);
       const details = this.parseMetadata($, url);
