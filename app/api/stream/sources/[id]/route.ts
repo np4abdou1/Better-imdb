@@ -32,8 +32,36 @@ export async function GET(request: Request, props: { params: Promise<{ id: strin
     const torrentioSources = await torrentioPromise;
     
     if (torrentioSources) {
-        // Limit torrentio results to top 5 to avoid clutter
-        sources.push(...torrentioSources.slice(0, 10)); // Top 10
+        const isCompatibleAudio = (source: StreamSource) => {
+          const audio = (source.audioCodec || '').toLowerCase();
+          if (!audio) return false;
+          if (audio.includes('aac') || audio.includes('opus') || audio.includes('ac3')) return true;
+          return false;
+        };
+
+        const MAX_TORRENT_SOURCES = 10;
+        const MIN_COMPATIBLE = 3;
+
+        const compatible = torrentioSources.filter(isCompatibleAudio);
+        const baseTop = torrentioSources.slice(0, MAX_TORRENT_SOURCES);
+
+        const selected = [...baseTop];
+        const selectedIds = new Set(selected.map((s) => s.id));
+
+        let compatibleCount = selected.filter(isCompatibleAudio).length;
+        if (compatibleCount < MIN_COMPATIBLE) {
+          for (const candidate of compatible) {
+            if (selectedIds.has(candidate.id)) continue;
+            selected.push(candidate);
+            selectedIds.add(candidate.id);
+            compatibleCount++;
+            if (compatibleCount >= MIN_COMPATIBLE) break;
+          }
+        }
+
+        // keep stable order by original ranking
+        const rankedSelected = torrentioSources.filter((s) => selectedIds.has(s.id)).slice(0, MAX_TORRENT_SOURCES);
+        sources.push(...rankedSelected);
     }
 
     return NextResponse.json({ sources });
