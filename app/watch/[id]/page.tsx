@@ -861,8 +861,12 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
   const showAudioControl = useMemo(() => {
     if (!isP2P) return false;
-    if (audioTracks.length > 1) return true;
+    if (audioTracks.length > 0) return true;
     if (relatedAudioVariants.length > 1) return true;
+    
+    // Check for metadata languages
+    if (currentSource?.audioLanguages && currentSource.audioLanguages.length > 0) return true;
+    
     const info = `${currentSource?.filename || ''} ${currentSource?.info || ''}`.toLowerCase();
     return /dual[-\s]?audio|multi[-\s]?audio|multiple\s+audio/.test(info);
   }, [isP2P, audioTracks.length, relatedAudioVariants.length, currentSource]);
@@ -1318,7 +1322,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                               <h4 className="text-xs font-bold text-white/90 uppercase tracking-wider">Audio Tracks</h4>
                             </div>
                             <div className="max-h-[240px] overflow-y-auto py-1 scrollbar-thin scrollbar-thumb-white/10">
-                              {audioTracks.length > 1 && (
+                              {audioTracks.length > 0 && (
                                 <>
                                   <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider text-white/40 font-bold">Container Tracks</div>
                                   {audioTracks.map((track) => (
@@ -1398,7 +1402,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                                 </>
                               )}
 
-                              {audioTracks.length <= 1 && relatedAudioVariants.length <= 1 && metadataAudioTracks.length === 0 && (
+                              {audioTracks.length === 0 && relatedAudioVariants.length <= 1 && metadataAudioTracks.length === 0 && (
                                 <div className="px-4 py-3 text-xs text-white/40">
                                   This source does not expose switchable container audio tracks in this browser.
                                 </div>

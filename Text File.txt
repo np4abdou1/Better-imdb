@@ -1,0 +1,597 @@
+I've read a lot of guides on how to pass Strong integrity and hide root from apps like Google Wallet, Company Portal, etc. Firstly, let me say that passing Strong integrity is nothing special. You can get Strong integrity and pass 90% of the root detection checks, but you could still be detected by certain apps. Either that, or Strong integrity is not a true result, due to some malformed or incorrect files related to your target.txt list or keybox, etc.
+
+As an example, I've used Yuri Keybox to get Strong integrity and while I could use Google Wallet and Company Portal, I couldn't use Revolut. I keep getting a blank screen when I open Revolut, it doesn't even tell me that root is detected or anything, I just get a blank screen. However, after I switched to using Integrity Box, I still get Strong integrity, but this time Revolut works (so do the other 2 apps). However, Yuri Keybox has provided a valid keybox now and so I switched back to it and everything works OK. Basically, you'll encounter issues every now and then with either the PIF fingerprint, keybox or perhaps some LSPosed modules or apps that trigger and flag root detection apps. It's a constant battle.
+
+Some people will tell you to use KSUNext + susFS and to be honest, that never worked for me. To clarify, I did get KSUNext + susFS working properly, I can hide root from certain apps, but some other apps still detected root. I've tried using APatch as well, didn't really have any luck.
+
+Some people will tell you to use Rezygisk instead of Zygisk Next, because it's 'open source'. In my opinion, just use whatever you prefer, you'll see why this doesn't matter much later on in the guide. I will say this though, if you really want to use Treat Wheels, you'll have to pair it with Rezygisk, as it's not compatible with Zygisk Next.
+
+Anyway, below is my own guide on how to pass Strong integrity and bypass root detection apps. I'll try to answer a few questions but I may ignore them if I can't be bothered. This guide isn't for beginners. If you don't know how to unlock bootloader, how to root and hide root in general, don't bother asking questions here. Don't ask me if I can test XYZ app for you. My main goal is to share what works for me, as is.
+
+One more thing - I don't know much about keyboxes and how some of the settings work, I just know that those settings got me the result I wanted. Some of the settings (specifically related to Integrity Box) are a bit confusing to me and I don't fully understand them all, but whatever, it works for me.
+
+
+
+
+Guide
+
+I have a few phones, but for the purposes of this guide, I'll just mention 2 of them.
+- Pixel 9 Pro Fold running stock A16 ROM
+- Poco F7 running xiaomi.eu A15 custom ROM
+
+
+
+Magisk modules​
+Magisk Alpha v30.6 (as of this writing)
+BetterKnownInstalled
+Play Integrity Fork v16 (or newer) by osm0sis
+Zygisk Next OR ReZygisk v1.0.0 (440-76bbabb-release) or newer. Go with Rezygisk if you can. If you can't find that particular Rezygisk version, go to the author’s GitHub → Actions builds and download it there. Do not use Zygisk Assistant, it's outdated.
+Treat Wheel v0.0.7 (or newer) OR Shamiko
+– Telegram release
+– Compatible with the above ReZygisk version
+- With Rezygisk + Treat Wheels, you don't need to configure any settings, you just flash the modules in Magisk and that's it, easy.
+Tricky Store v1.4.1 build 248 (or newer)
+VBMeta Fixer (this must be installed after Play Integrity and Tricky Store)
+Yuri Keybox Manager v2.41 (as of this writing) (recommended) OR Integrity Box v27.1 (as of this writing)
+LSPosed IT v1.9.2-it build 7455 or newer
+Yet Another Bootloop Protector (not related to this guide but it's such a good module that will protect you from bootloop, so I included it here)
+HMA-OSS (recommended) OR HMAL v4.11 r62 (or newer)
+If using HMAL, then use whitelist mode
+If using HMA-OSS, then you don't need to use whitelist mode. Use the preset templates and preset settings instead.
+An extra side benefit of using HMA-OSS is that it has a preset setting for Developer settings and Accessibility options. This means it can hide the USB Debugging modes, etc and you can apply this per app easily. Note that there are certain LSPosed modules like IAmNotADeveloper that also do the same thing, but it doesn't work for all apps. In my testing, HMA-OSS is able to successfully hide USB Debugging from Company Portal and the compliance check doesn't pick this up.
+There's a very weird bug related to the 'App data isolation' setting and OneDrive cloud sync in Swift Backup. More on this later.
+On my Poco F7, I was initially using HMAL v4.11 and I was able to use Company Portal and Teams without any issues, i.e I got past the compliance check / provisioning stage. But later on, I keep having issues with compliance check and I finally figured out it was related to HMAL v4.11 on my Poco F7. It was the cause of the problem. This isn't a problem on my Pixel phone though. However, after switching to HMA-OSS on my Poco F7, everything works fine.
+IAmNotADeveloper
+Hides USB debugging from most apps
+❌ Does not hide USB debugging from Company Portal
+KSUWebUI
+Required to access advanced options for some modules. Note that you can access some advanced options for some modules in Magisk / Magisk Alpha, but there are additional settings that you won't necessarily have access to unless you use KSUWebUI.
+PlayStoreSelfUpdateBlocker - this isn't tested yet but I listed it here in case someone wants a way to block Play Store from updating itself, which may break attestation.
+PlayVersionSpoofer - same as above
+DoNotTryAccessibility - you DON'T need this one, but I'm adding it here in case you want to hide Accessibility services. These aren't necessary to be hidden in order to use apps that detect root. Note that you can also use HMA-OSS to hide not just Developer setting options, but Accessibility options as well.
+Click to collapse
+
+
+
+Magisk Alpha settings​
+Disable native Magisk Zygisk. I think this is already disabled by default when you install Magisk / Magisk Alpha. We're going to use Rezygisk or Zygisk Next instead.
+DenyList enabled. Don't use Enforce DenyList.
+Add the following apps that you want to hide root into the DenyList:
+Google Play Services
+Play Store
+Google Services Framework
+Google Wallet
+Revolut
+Company Portal
+Microsoft Teams
+Outlook
+Microsoft Edge
+Any other apps that need root hiding, e.g. root detector apps like Native Detector, Ruru, Duck Detector, etc
+When adding apps to the DenyList, it's very important to note the following:
+Always click the app name to expand, THEN you tick the tickbox. If you tick the tickbox, it won't tick the sub-items.
+If you uninstalled an app and reinstalled it later, the app will not have all the sub-items ticked anymore. You have to always remember to keep going back to the DenyList to check that the app has all the tickboxes ticked.
+Click to collapse
+
+
+
+
+HMA-OSS / HMAL​
+If using HMAL, then create a whitelist template, I call mine "Root - Whitelist". The apps that are visible are:
+Company Portal
+Edge
+Outlook
+Teams
+Apply the template to the following apps:
+Company Portal
+Edge
+Outlook
+Teams
+Any other apps that need root hiding, e.g. Native Detector, Duck Detector, etc.
+If using HMA-OSS, you can either do the same above (recommended), or use a blacklist with the preset templates. If it's the latter, then tick the presets that make sense and apply to the apps you want to hide root from (e.g. Company Portal, Teams, etc). While the presets are nice, I prefer using my own template with a whitelist.
+
+So what does the above actually do? What happens when you run e.g. Teams? Let's assume you're using a whitelist approach and you've created a whitelist template with just those 4 apps listed above. It means that Teams will see only those 4 apps on your device, nothing else. Well, technically Teams can see your System apps too, depending on what setting you enable in your HMAL / HMA-OSS, but the point is that Teams will not see any other User apps, such as your Duck Detector or your dodgy root-related apps that could trigger root detection. You could install a suspicious app tomorrow and you don't have to configure anything and worry about it. Using a whitelist is great, it's just a one-time setup. If you're using a blacklist, it means it's doing the opposite. Instead of letting your apps see JUST the apps you want it to see, you're basically saying you want the apps to NOT see those apps. Using a blacklist means if you don't want Teams to see dodgy app #1, #2, #3, #4 etc, you have to select and hide them all. If you have 40 or 50 apps that could trigger root detection, you have to include all of those in the blacklist template. If you install more tomorrow, or next week, you have to always remember to update your blacklist with those newly installed apps. It's tedious and annoying. By the way, the reason why we're making those 4 apps see each other is simply because Teams needs to know about the existence of Company Portal (for compliance check) and Edge (for opening links sent in a Teams messages in the browser).
+
+
+BUG - Swift Backup
+
+This seems to only be an issue on my Poco F7 on HyperOS 2.0, but not Pixel 9 Pro Fold. The bug is related to Swift Backup. If you use OneDrive as your cloud sync for Swift Backup, i.e all your backups are stored in your OneDrive account, then using HMAL with 'App data isolation' setting enabled will break the Swift Backup OneDrive cloud sync.
+
+However, I found that if you disable that setting in HMAL and go back to OneDrive cloud sync in Swift Backup, it'll work. Then, you can go back to HMAL and re-enable this setting. If re-enabling this setting breaks the OneDrive cloud sync again, then just disable it while you're backing up or restoring from OneDrive. If you're trying to set up cloud sync for the first time in Swift Backup, just disable the setting in HMAL temporarily. I've also tested this in HMAL v3.6.1 and it's the same issue.
+
+However, HMA-OSS never gave me any issues. Also, note that I said this was an issue only on HyperOS 2.0. I'm now on HyperOS 3.0 and it seems fine, although I'm not using HMAL and prefer using HMA-OSS now.
+
+If the above fix doesn't work, then disable HMAL in LSPosed, restart phone and then try again in Swift Backup. You'll of course need to re-enable HMAL later on if you want to hide root properly for certain apps.
+
+If Swift Backup still doesn't work, then maybe think about migrating to some free alternatives:
+Code:
+https://github.com/XayahSuSuSu/Android-DataBackup
+https://github.com/NeoApplications/Neo-Backup
+Click to expand...
+
+
+
+Play Integrity​
+1. Clean Up Existing PIF / Tricky Store Artifacts​
+First, remove files related to keyboxes/tricky store/PIF. We want to start clean.
+Open Root Explorer (or any root-capable file manager)
+Navigate to /data/adb
+Delete:
+Props.pif
+tricky_store folder
+Why this matters​
+Props.pif is created by Play Integrity Fix (INJECT) by KOWX712, or some other forks
+We are not using that PIF in this setup
+Leaving it in place can cause conflicts or incorrect spoofing
+2. Generate a Fresh PIF via Play Integrity Fork​
+Open Magisk Manager
+Locate Play Integrity Fork
+Tap Action
+This will:
+Download a custom PIF into this path:
+/data/adb/modules/playintegrityfix
+​
+3. Configure Yuri Keybox Manager​
+Launch Magisk and find Yuri Keybox Manager and click the Action button. That's it, it should take care of everything from adding your apps to the target.txt file for Tricky Store, creating a valid boot hash file, fetching a valid keybox, etc.
+Reboot phone (VERY IMPORTANT!)
+If you're using root detection apps like Duck Detector etc and they flag LSPosed or Play Integrity issues, then you can use Yuri Keybox Manager's built-in scripts to fix them (potentially). There were a few times where I needed to do this and they worked fine. To do this, first Launch KSUWebUI.
+Open Yuri Keybox Manager and go to Menu+. From there, you can choose Fix Detect LSPosed and Fix Detect PIF, depending on which one you need. Only apply to the ones that are broken, don't just go and apply all the scripts unnecessarily.
+Click to collapse
+
+
+The section below is for Integrity Box. The author who developed this apparently vibe coded using ChatGPT or whatever, so the code isn't reliable according to some experts. It did work for me, but I'm staying away from poorly developed modules. If using Yuri Keybox Manager doesn't work for you, then try this.
+
+3. Configure Integrity Box​
+Launch KSUWebUI
+Open Integrity Box
+Go to Module Settings and enable all of the following:
+✅ PIF Advanced
+✅ Disable GMS Spoofing
+✅ Disable Play Store Spoofing -> you might have to play with this one. I found that it sometimes breaks Google Wallet, even though Revolut and other apps continue working fine. Note that this setting would require you to restart your phone (it should show a toast popup message).
+✅ Spoof Debug Fingerprint
+✅ Spoof Debug Build
+✅ Spoof Build Tag
+✅ Spoof Encryption
+✅ No Redirect
+✅ Kill Switch
+​
+Your PIF setting should only be spoofing Build and Spoof Build (Play Store). You shouldn't spoof anything else, such as Props, Provider, Signature, SDK. If you spoof the other ones, your Google Wallet will fail.​
+
+[Optional]
+I need to explain this first before moving on. From what I understand, keyboxes are applied to apps defined in the target.txt file under the tricky_store folder. For any apps that we want to hide root from, such as Revolut or Google Wallet, we'll include them in the target.txt file. For apps that we don't care about hiding root from, such as Swift Backup or Root Explorer or Spotify, we do NOT need to add them to the target.txt file.
+
+When apps are included in the target.txt file, that means we'll be using spoofed keybox(s) to present to those apps and therefore "trick" them into thinking they're legit. This process uses system resources and drains battery (apparently). So the idea is to only do this for apps that require hiding root.
+
+The reason why this is Optional is because this step is more for optimization and efficiency, but it doesn't really affect the end goal - which is to achieve Strong integrity and hide root successfully from apps that you care about.
+
+With that said, here's what you need to do:
+
+Go back to module settings and select Blacklist Packages, you’ll see a list of apps. You'll want to focus on any apps that you don't care about hiding root from. In other words, apps like Swift Backup or Spotify or whatever will be added here. Press the block icon to the right of the toggle and it should highlight the app in red colour. This now means they are excluded from the target.txt list. These apps will only be excluded once you've tapped Action on Integrity Box in Magisk Manager.
+Go to Custom Keybox, you’ll see a list of apps
+For every app:
+Select the 3×3 square icon (Default, not AOSP, although using AOSP may be required for some apps, which I will discuss later).
+Alternatively (this is my preferred method), you can choose AUTO, then click "Package (click to select all)" and then click Save. This will select all the packages and apply the AUTO option.
+If you install a new app later on and it requires root hiding, just come back to this page and make sure the app is selected.
+If you selected all the apps AND you also performed the Optional step above, at this point you might be wondering why are all the apps selected, including the ones that we just blacklisted (from the Optional step)? As explained earlier, the blacklisted apps will only be excluded once you've tapped Action on Integrity Box in Magisk Manager.
+Tap Save (top right). Go back to the main settings page
+Tap Update Keybox
+4. Finalize & Reboot​
+Return to Magisk Manager
+Find Integrity Box
+Tap Action
+This is only relevant if you performed the Optional step from point #3. If you go back to Integrity Box (using KSUWebUI) and then check the Custom Keybox page, you'll now see that the apps you've blacklisted are now deselected. Essentially, the blacklisted apps will only be deselected when you tap Action via Magisk Manager.
+Reboot the phone
+5. Verification After Reboot​
+After rebooting, go back into Integrity Box (via KSUWebUI). It should show something like this:
+Target has XXX apps
+XXX = number of apps selected in Custom Keybox
+Spoofing PIF: Enabled
+Click to collapse
+
+
+
+⚠️ If your app still detects root, then:
+You missed a step or
+You didn’t reboot after pressing Action for either Integrity Box or Yuri Keybox Manager
+
+
+
+
+
+And that's it. You should now pass Strong Integrity and be able to use Mcdonalds, Google Wallet, Revolut, Company Portal, etc. I can't guarantee that all apps that detect root will work, but these are the primary ones I use and they are known to have pretty strict root checks (specifically Company Portal and Revolut), so if I can pass those on 2 different phones, it should work for you. Root detection apps like Native Detector and Duck Detector shows either 100% pass, or it'll flag like 2 issues at most (Abnormal Environment and Abnormal PackageManager), but these aren't critical in my opinion.
+
+Note also that some of the settings will require you to restart the phone for the changes to apply, so it may be that you'll get Basic or Device Integrity and until you've restarted the phone (and assuming you've done all the steps correctly), you won't see Strong integrity. This happened to me once.
+
+From this point on, all you need to do is to keep an eye on any updates for keyboxes. If e.g. Yuri releases a new keybox, just rename the file to keybox.xml and place it in the tricky_store folder (overwriting the old file). And keep an eye out on any new releases of modules, e.g. Rezygisk, Treat Wheels, etc.
+
+
+
+
+
+If you have Strong Integrity and your app (e.g. Revolut) works but it doesn't work for some other app (e.g. Google Wallet), then it's likely that we need a different keybox for that app.
+
+In my case, I had to do this extra step for Google Wallet on my Poco F7, but I didn't have this problem on my Pixel, even though I set them both up exactly the same way.
+
+If you're using Integrity Box, then you may need to do this extra step to fix Google Wallet. Go to Integrity Box (using KSUWebUI) and go to Custom Keybox. Find Google Wallet and then choose the AOSP icon (the 2nd one), then select the Generate dropdown menu option. Then click Save on the top right. Then go back to Magisk Manager and click Action for Integrity Box. You may need to restart phone.
+
+I believe doing the above should give it a different keybox for Google Wallet, while your other apps (e.g. Revolut) will use another keybox. If that doesn't work, try the same steps again. OR, you might need to select the Lock icon and select Generate. This worked sometimes, but I believe the AOSP + Generate combination works better for me. I've had to do this a few times because I was breaking some things here and there, which also impacted Google Wallet. Anyway, I can confirm that Google Wallet (adding new card) and Revolut both work concurrently.
+
+
+
+
+
+Remember, sometimes when you see Strong Integrity in SPIC, it doesn't mean much. After you hit the Action button for Yuri Keybox or Integrity Box in Magisk manager, you STILL NEED TO REBOOT your phone for everything to take effect. There were a few times where I did everything correctly and my Revolut or Google Wallet will fail and show root is detected, or that the phone's firmware is not supported (message shown in Revolut). However, restarting the phone will fix the issue.
+
+If it doesn't work, then it's likely due to the following:
+- Invalid/Banned keybox
+- Invalid/Banned PIF fingerprint
+- LSPosed modules causing issues - probably HMAL v4.11. Try using HMA-OSS instead.
+
+If it was a root detection issue, then your Company Portal will show that error message. If it shows something related to Basic Integrity and not root detected, then it's probably caused by a bad PIF fingerprint or one of your LSPosed modules.
+
+It's important to note that PIF gets banned by Google regularly, so you may need to fetch a new one in Play Integrity Fix or Play Integrity Fork. Just because you see Strong Integrity, doesn't mean your fingerprint is OK.
+Click to expand...
+
+
+
+
+One more important thing I want to add. On my Poco F7, I've run into a lot of issues trying to bypass the MDM policies pushed out via Company Portal. It blocks me from using clipboard between the personal and work profiles. More about this can be read here - https://xdaforums.com/t/request-byp...-intune-company-portal.4610355/#post-90441112
+
+I used to be able to bypass this with a certain method, but it doesn't work anymore. Looks like what happens during the Company Portal provisioning process is that it will install Device Policy app in your Personal Profile and uses it to enforce policies on your phone. If you disable this app, then apps that rely on compliance check, such as Teams/Outlook etc, they'll fail to sign in. You'll get an error message in Teams that says something like the app needs to pass InTune policies or whatever. This is new and obviously patched now. Back then, it used to be that you just need to pass the Company Portal compliance check and if that passes, then all other apps that rely on Company Portal will automatically trust that your device is compliant. Not anymore.
+
+So anyway, if you disable Device Policy app in your personal profile, you'll need to enable it if you run into issues with Teams/Outlook etc.
+
+For anyone who's interested, the device policies are synced to here:
+/data/system/users/11/device_policies.xml
+
+Where 11 is your Work Profile user. This number changes whenever you set up a Work Profile. If you remove and add a new one, the number could change from 11 to 10 or 12 or whatever.
+
+If anyone knows how to properly bypass MDM policies, please let me know.
+
+[UPDATE]
+I found a workaround using a new method that's better than the old method. Once you've got your Company Portal setup, install a clipboard sharing app in the normal user profile. Then, use adb shell with su to install to the work profile. Before you do that, go into Developer Options and make sure Verify app over USB is disabled.
+
+For example, let's say I want to install MiXPlorer into my Work Profile. I need to first install this in my normal User profile, then I do this (execute each line individually):
+
+Code:
+adb shell
+su 0 /system/bin/pm install-existing --user 10 com.mixplorer.silver
+
+Where '10' is the Work Profile user. This could be different each time you set it up. Use this to find out:
+Code:
+adb shell pm list users
+
+
+
+
+
+
+Anyway, because I was trying to bypass the MDM policies, I was testing and breaking a lot of things, which meant that either my Work Profile was bung, or my Company Portal or Teams was messed up, so I've had to wipe my Work Profile (and sometimes even wipe my phone /DATA completely) and redo the root hiding process from scratch. Most of the time, it would go smoothly and I would get back into Company Portal just fine. However, at some point, both Company Portal AND the root detection apps (e.g Duck Detector) started failing. Company Portal doesn't detect root, but it thinks my basic Google integrity check has failed. The root detection apps would find Zygisk and LSPosed, even though I was passing them successfully before. I found that there's probably traces of root related files that somehow remained even after a phone wipe, so I ended up reflashing the ROM completely and wiped again.
+
+Just to be clear, initially I did this:
+
+Code:
+adb reboot bootloader
+fastboot erase misc
+fastboot erase userdata
+fastboot erase metadata
+fastboot reboot
+
+But that wasn't enough, as Company Portal wasn't passing root detection checks anymore. So I ended up just re-flashing the entire ROM and of course wiped data and started from scratch. I of course also re-flashed Magisk Alpha into both slots A/B for init_boot. Then everything worked again (except for bypassing the MDM policies). But some time later, it failed again. So I then upgraded to a newer build (from HyperOS 2.0 to HyperOS 3.0) to get a new fingerprint etc. I also traced down to certain LSPosed modules (mainly HMAL, not HMA-OSS though) to be the culprits.
+
+
+
+
+
+
+Things to note​
+
+- Certain LSPosed or Zygisk modules can trigger root detection apps to find LSPosed or Zygisk hooks. If you're using Duck Detector or other root detection apps, make sure to have a baseline test done with just the core apps. As you add more modules, do a few more tests and you'll probably find that the tests will fail as you add more modules. However, if you know the tests pass with the list of apps I've recommended above, then you know that's the baseline and any other modules you add that caused the test to fail will be on you to fix and sort out. Having said that, just because apps like Duck Detector detects LSPosed or Zygisk injections/leaks, it doesn't mean your Company Portal will detect them. I use certain LSPosed modules that cause both LSPosed and Zygisk leaks in Duck Detector, but my Company Portal still works fine. I'm talking about setting up Company Portal from scratch, which creates a new Work Profile and letting it do the compliance check of your device, etc.
+
+- There are a few things that can be banned. So far, the only ones I know of are PIF fingerprint and keybox. Tricky Store, Integrity Box, Yuri Keybox are all focused mainly on keyboxes, whereas Play Integrity Fix/Fork are focused on PIF fingerprints. You may be getting Strong Integrity and you may be passing root detection apps, but it doesn't mean either one of those (fingerprint or keybox) are working properly. Either of them could be banned and you may need both to pass root detection checks in certain apps, like Company Portal for example.
+
+- After creating this guide, I came across this Reddit thread regarding Integrity Box:
+Code:
+https://www.reddit.com/r/androidroot/comments/1li6d34/integritybox_removed_from_github/
+
+I didn't know the history behind Integrity Box and that it was vibe coded, until now. There isn't really a guide on how to use Integrity Box (not that I can find anyway) and the interface is rather poorly designed and it can be confusing to use (which makes sense now, as it was vibe coded). However, since I was able to achieve Strong Integrity + successfully hide root from apps, I can't really complain much. Having said that, I'm pointing this out here so you're aware of what this app is and the creator behind it. Use it at your own risk. I'm not using Yuri Keybox. Both allowed me to get the result I wanted, so if one doesn't work for you, maybe try the other.
+
+- I mentioned earlier that it doesn't matter if you use Rezygisk or Zygisk Next. Firstly, if you use Rezygisk, you'll probably run into issues with Treat Wheels or any other Magisk modules. You'll probably get an error like "Zygisk not detected....", even though you DO have Zygisk (i.e from Rezygisk). I ran into this problem a few times on my Pixel and I didn't do the installation steps any differently. I would wipe my Pixel and start from scratch and sometimes I get this error, sometimes I don't.
+
+I've tried uninstalling Rezygisk and reinstalling, I've tried toggling it off, restart the phone and toggling it on. I've tried reinstalling the other Magisk modules (like Treat Wheels). I've tried toggling Magisk's native Zygisk on and off, etc. Nothing really fixed the issue in a consistent way. What I did find is that toggling Magisk's native Zygisk on, disabling Rezygisk, then restart the phone and then do the reverse, seems to work the best. Also, I found that if I install Zygisk Next, the modules will always detect Zygisk and work. If I then uninstall Zygisk Next and install Rezygisk again, then sometimes the modules will detect Rezygisk and work fine. It's very finicky.
+
+Due to this reason, at one point my Pixel had Zygisk Next + Shamiko and everything still works fine. But later on, I was able to get Rezygisk working, so I switched to Rezygisk + Treat Wheels and removed Shamiko. Either way, I get Strong Integrity and those pesky apps don't detect root. I would always recommend using Rezygisk + Treat Wheels. You don't need to configure any settings, you just flash the modules in Magisk and that's it, easy.
+
+- Treat Wheels is currently only compatible with Rezygisk, although I think the latest Zygisk Next version also supports it now, I haven't checked. If you want 100% compatibility with Treat Wheels (based on my experience), then make sure you have Rezygisk installed.
+
+- NoHello is not compatible with Treat Wheels, so you can't have them both installed at the same time.
+
+- I've tried Yuri Keybox initially and I was able to get Strong Integrity. But there's something about the keybox that doesn't give me the actual/real Strong Integrity result, if that makes sense. Some apps like Revolut don't just check for Strong Integrity, but they probably verify other things too. It might see Strong, but still fail to work. After switching to Integrity Box, I still get Strong Integrity, but this time I can use Revolut just fine. But some time later, I switched back to Yuri Keybox and it works fine with Revolut. So basically, I'm saying that one solution can work today but break the next day. This is all just a guide, not a guaranteed fix. If something doesn't work, try another app. Having said that, I've tested all of this extensively, with different combinations and recommendations, so I think my guide will have a 95% chance of getting you the result you want.
+
+- Regarding LSPosed, there are a few versions, such as Relsposed, LSPosed Irena, JingMatrix's version, etc. Some versions don't work well on my phones and some don't work well on Android 16. For example, JingMatrix's version doesn't work on my Pixel 9 Pro Fold on A16, as it would crash and exit automatically and I had to use another LSPosed version made by another author. But on my Poco F7, JingMatrix's version works fine. Secondly, some LSPosed versions are detected by root detection apps (good way to test is Native Detector or Duck Detector). The weird thing is, it's not consistent across phones. LSPosed Irena could be working fine on one phone without getting detected, but gets detected by the same app on another phone. However, don't be bothered by the detection results here, you don't need to pass all the tests 100% in order to use the actual apps (Revolut, Google Wallet, etc).
+
+Another thing to note about LSPosed is that some versions don't always work with all modules. For example, I'm using the Pengeek (also known as customiuizer) module for my Poco F7, which extends the functionalities of MIUI or HyperOS ROM (even the xiaomi.eu one, which is based on the China HyperOS ROM). Even though the module is enabled and I can configure the settings, none of the settings actually apply. But when I changed to a different LSPosed version from another author, it works.
+
+- All the root detector apps, including all the frameworks, root apps etc can be found here:
+https://github.com/LRFP-Team/LRFP
+
+You'll have to navigate around the Github project a bit to find what you need. For example, the root detector apps are found here:
+https://github.com/LRFP-Team/LRFP/blob/main/Detectors/README.md
+
+Just GIT clone the root project Github URL (first link) to download all in one go.
+
+For Duck Detector, it should also be found there, but if not then go to Yuri's Telegram channel (same author as Yuri Keybox) and find it there. It's a pretty good root detector app, hence why I use it. There's also Hunter, Luna, Ruru, etc that I also use as well to get a better average of the test result.
+
+- After doing so much research, testing and troubleshooting, I've reached a point where I don't think rooting is worthwhile anymore. Don't get me wrong, I love what you can achieve with root. I love my NANDROID backups, I could just buy the exact same phone and restore from an existing TWRP backup and get my phone up and running exactly the way it was within 30 mins of automated restore. I don't have to do anything, maybe just spend like 2 minutes going into TWRP to select and restore from backup. I love my Swift Backup and how I can restore my 300+ apps (with data) easily. There's a lot of power to rooting, but I find that it just conflicts with too many other things that I also rely on (banking apps, work-related apps that rely on Company Portal, etc).
+
+Yes, I've successfully root hide against all my apps on various phones, but it was painful. Things change (PIFs or keyboxes getting banned) and you go back to square one again. It's a constant cat and mouse game. Not only that, but I've read so many depressing comments about the state of rooting and what the future holds. A lot of people (experts) will tell you that the days of rooting is almost over and I tend to agree.
+
+To future proof this, I think I'm going to switch to a stock phone and run Shizuku or Dhizuku, or perhaps some other solution that I haven't heard of or tested yet (recommend here if you know any that's good). I root mainly because I use a lot of automations on my phone with MacroDroid. While I know you can use MacroDroid or Tasker with elevated ADB permissions, there are some issues with it that I discovered along the years as well. One of which is having to invoke ADB elevated privileges after every phone reboot.
+
+Today, I discovered this Shizuku fork - https://github.com/thedjchi/Shizuku and this basically solves that problem. It can auto-start the service by itself on phone reboot. I know I can achieve this with UI Automation or Termux or whatever, but this is the cleanest solution that I've found and I've been looking for something like this for a while.
+
+Perhaps I don't need root anymore and perhaps you don't either. If anyone's interested, head over to this thread on anything Shizuku related:
+https://xdaforums.com/t/root-alternative-shizuku-wireless-adb-dhizuku-non-root-apps-thread.4692215/
+
+More specifically, check out the Shizuku fork mentioned in that thread, it's really nice and solves one of my long-time pain points of using Shizuku on a non-rooted device and having to deal with all that BS after reboot the phone. I go into more detail on that here:
+https://xdaforums.com/t/root-altern...oot-apps-thread.4692215/page-12#post-90447056
+Last edited: Feb 2, 2026
+Like Reactions:paladin5897, TheNewHEROBRINE and user0u
+user0u
+Senior Member
+Dec 31, 2025
+#2
+Thanks for the guide. The hoops we have to jump through just to get an app running has become ridiculous.
+enzomtp
+enzomtp
+New member
+Dec 31, 2025
+#3
+Works perfectly thanks
+I used NoHello tho and it works without any issues
+chaoscreater
+chaoscreater
+Senior Member
+Jan 1, 2026
+#4
+enzomtp said:
+Works perfectly thanks
+I used NoHello tho and it works without any issues
+That's good. Out of curiosity, are you using Rezygisk or Zygisk Next and are you using Shamiko or Treat Wheels as well? Or just Nohello? There's also Nohello KPM for KernelSU, which I haven't tried.
+Ale4670k
+Ale4670k
+New member
+Jan 1, 2026
+#5
+Hi @chaoscreater
+Is this guide working for pixel 6 pro?
+chaoscreater
+chaoscreater
+Senior Member
+Jan 1, 2026
+#6
+Ale4670k said:
+Hi @chaoscreater
+Is this guide working for pixel 6 pro?
+Sorry, but I'm not going to bother with these types of questions. It's a waste of everyone's time, for the following reasons:
+
+- I don't use your phone. I already mentioned I use Pixel 9 Pro Fold, which is newer than yours.
+- Why don't you test it and find out for yourself? Did you even bother trying?
+- None of the guides on how to hide root are tailored to a specific phone model.
+Ale4670k
+Ale4670k
+New member
+Jan 1, 2026
+#7
+Did I ask something wrong? I haven't tried because I don't know this field and I have never done it before, you seemed experienced so I thought it was smart to ask before doing anything. I simply asked a simple question. Sorry if I bothered you
+chaoscreater
+chaoscreater
+Senior Member
+Jan 2, 2026
+#8
+Ale4670k said:
+Did I ask something wrong? I haven't tried because I don't know this field and I have never done it before, you seemed experienced so I thought it was smart to ask before doing anything. I simply asked a simple question. Sorry if I bothered you
+
+If you don't know anything about rooting or hiding root, then this guide is not for you. This is not for beginners.
+wfunctionjohn
+Member
+Jan 3, 2026
+#9
+Thanks for the guide. Question coming from APatch: do you feel it's safe & sufficient to uninstall the modules, flash only the boot image, and switch to Magisk, while keeping everything else? Or should we clear out everything in /data/adb too? Do you expect there to be a risk of this not working in that case, and/or a risk of a boot loop? Wondering how likely it is one would have to wipe the phone.
+chaoscreater
+chaoscreater
+Senior Member
+Jan 4, 2026
+#10
+wfunctionjohn said:
+Thanks for the guide. Question coming from APatch: do you feel it's safe & sufficient to uninstall the modules, flash only the boot image, and switch to Magisk, while keeping everything else? Or should we clear out everything in /data/adb too? Do you expect there to be a risk of this not working in that case, and/or a risk of a boot loop? Wondering how likely it is one would have to wipe the phone.
+To be honest, I'm not really familiar with APatch. I used it a bit but not enough to be an expert at it.
+
+I could be wrong, but I believe APatch supports Zygisk Next, Rezygisk or NeoZygisk - which means you can install them and then install your typical Zygisk modules on top. Whether you're using KernelSU or Magisk or APatch to run Zygisk is up to you, but the underlying Zygisk modules (e.g. Tricky Store, Play Integrity Fork, etc) should still work regardless of which root solution you choose. Therefore, you shouldn't need to clear anything out in /data/adb, but you can always back them up and then do a clean wipe of that path and start clean if you really wanted to.
+
+If you're using LSPosed modules, they should still work regardless of your choice of root solution.
+
+Unless, you were referring to non-Zygisk modules? If yes, then I know nothing about this. Perhaps there are APatch specific modules that's only useable in APatch. If that's the case, maybe it's best to uninstall them, before you switch to another root solution.
+
+The point is, you should try to start clean/fresh as best as you can to prevent any conflicts caused by existing root solutions. You don't need to wipe data / factory reset, unless you messed something up and really need to start from scratch. If I'm switching root solutions, I'd always try to remove any remnants of the old one before migrating to the new solution.
+
+Secondly, to prevent bootloop, you should use the Zygisk module 'Yet Another Bootloop Protector'. I mentioned this in the guide.
+
+Thirdly, Magisk isn't for boot.img specifically. Newer phones these days will require patching init_boot.img, not boot.img. So you need to figure out exactly what you need, instead of just patching Magisk to boot.img. It will still work I believe, it's just that it's patched incorrectly and I don't know what happens when it comes to root hiding at that point.
+Dtmsit
+Member
+Jan 4, 2026
+#11
+Why did you not use tricky store and tricky store UI for the play integrity?
+chaoscreater
+chaoscreater
+Senior Member
+Jan 6, 2026
+#12
+Dtmsit said:
+Why did you not use tricky store and tricky store UI for the play integrity?
+Because I'm using Integrity Box to do that instead. Read the damn guide.
+wowie1012
+New member
+Jan 9, 2026
+#13
+This is an almost perfect guide for me, as a person who's been struggling with these stupid root detection apps for a long time now. I can't thank you enough. "Almost perfect" because:
+
+For some reason the Zygisk Next does not detect Shamiko for me. Both are latest versions on github. So when I tested with Native Detector it detected Magisk. But Zygisk Assistant worked instead. Native Detector did detect some "Zygisk" things but it still worked with my case.
+
+Oh and also one of my apps detect apps with accessibility permissions, in which case I used a module called DoNotTryAccessibility to solve it. The guide doesn't mention this so I figured I'd throw it in.
+Last edited: Jan 9, 2026
+enzomtp
+enzomtp
+New member
+Jan 12, 2026
+#14
+chaoscreater said:
+That's good. Out of curiosity, are you using Rezygisk or Zygisk Next and are you using Shamiko or Treat Wheels as well? Or just Nohello? There's also Nohello KPM for KernelSU, which I haven't tried.
+Sorry didn't see earlier, i used to use zygisk next and switched to zygisk (the integrated one) to fix some issues with su not working in termux and superuser prompt not showing up, i used to use nohello but same i switched back to the integrated magisk alpha blacklist. And ykw? Revolut still works and other apps like government login apps works when i put them in blacklist + hma
+Ig tricky store and play integrity fix are the most important
+enzomtp
+enzomtp
+New member
+Jan 12, 2026
+#15
+chaoscreater said:
+If you don't know anything about rooting or hiding root, then this guide is not for you. This is not for beginners.
+ngl i've rooted my phone once and bricked it cus i enabled orm lock after rooting,, and this is the second time i root a phone. Honestly your guide was easy to follow even as someone who never rly rooted a phone (well i do like to mess with some things tho)
+
+No its not beginner friendly ig, but it is not that hard either lmao
+chaoscreater
+chaoscreater
+Senior Member
+Jan 12, 2026
+#16
+wowie1012 said:
+This is an almost perfect guide for me, as a person who's been struggling with these stupid root detection apps for a long time now. I can't thank you enough. "Almost perfect" because:
+
+For some reason the Zygisk Next does not detect Shamiko for me. Both are latest versions on github. So when I tested with Native Detector it detected Magisk. But Zygisk Assistant worked instead. Native Detector did detect some "Zygisk" things but it still worked with my case.
+
+Oh and also one of my apps detect apps with accessibility permissions, in which case I used a module called DoNotTryAccessibility to solve it. The guide doesn't mention this so I figured I'd throw it in.
+Click to expand...
+
+That's weird, I've never had issues with Zygisk Next detecting Shamiko. You shouldn't use Zygisk Assistant though, it's old and outdated and a lot of threads recommend against it. Stick to Rezygisk or Zygisk Next. I'd recommend using Treat Wheels instead of Shamiko. You can pair Treat Wheels with Rezygisk.
+
+As for the accessibility stuff, it's not mentioned because it's not needed to hide root. I've never come across any apps that check for this stuff. You can have accessibility services enabled for e.g. Bitwarden on a non-rooted phone and that's perfectly normal. So having them doesn't and shouldn't break root detection apps.
+
+Again, you do NOT have to pass every single test in those apps. They're just there for guidance.
+
+Also, HMA-OSS not only hides apps from other apps, but it also offers hiding settings as well, such as Accessibility and Developer Option settings. Maybe try using HMA-OSS instead of HMAL. The less apps you use to achieve the result, the better. Otherwise, there's too many attack surfaces for those apps (e.g. Company Portal) to detect and trigger.
+Arcline
+Senior Member
+Jan 14, 2026
+#17
+Ill try it out cuz why not. But I went the opposite direction, said screw it and left the anti-root apps.
+chaoscreater
+chaoscreater
+Senior Member
+Jan 14, 2026
+#18
+Arcline said:
+Ill try it out cuz why not. But I went the opposite direction, said screw it and left the anti-root apps.
+It's only a matter of time until the normal apps start to become anti-root apps. A lot of apps are tightening on their security these days, more and more companies or people care about security and so everything including bloody McDonalds app will check for root now. If you work for a company of a certain size, chances are they'll be using Teams or whatever and that means Company Portal is required and that checks for root. Tons of people in India complained about their banking apps not working anymore with root. The landscape is changing pretty rapidly, so staying rooted seems pointless now. A lot of the apps I use these days are anti-root, so I don't have the same luxury as you unfortunately.
+Arcline
+Senior Member
+Jan 14, 2026
+#19
+chaoscreater said:
+It's only a matter of time until the normal apps start to become anti-root apps. A lot of apps are tightening on their security these days, more and more companies or people care about security and so everything including bloody McDonalds app will check for root now. If you work for a company of a certain size, chances are they'll be using Teams or whatever and that means Company Portal is required and that checks for root. Tons of people in India complained about their banking apps not working anymore with root. The landscape is changing pretty rapidly, so staying rooted seems pointless now. A lot of the apps I use these days are anti-root, so I don't have the same luxury as you unfortunately.
+You could use a work phone, that's an option too. Your private phone could be the modded one.
+chaoscreater
+chaoscreater
+Senior Member
+Jan 14, 2026
+#20
+Arcline said:
+You could use a work phone, that's an option too. Your private phone could be the modded one.
+Not really keen on carrying 2 phones around. It becomes frustrating and annoying real fast when you can only use certain apps on one phone while you have to switch to the other for another set of apps. I'd rather just find a happy middle ground (if there is any) and use one phone.
+
+Right now for myself, it's all about future proofing and reducing pain points and complexities. I can access everything I want to just fine on my rooted phone, but I know keyboxes have been soft-banned in the last few days and it'll only be a matter of time before something breaks and impacts me. I'm just setting up my non-rooted phone and testing a few things to see if I could completely switch to it in the future.
+
+
+Hello. Can you check if this Banking app works?
+
+UBL Digital Bank
+
+Thank you
+chaoscreater
+chaoscreater
+Senior Member
+Jan 16, 2026
+#22
+zakir786lrk said:
+Hello. Can you check if this Banking app works?
+
+UBL Digital Bank
+
+Thank you
+Sure, just give me your bank account. How the hell do I check if it works if I don't even bank with them?
+
+Don't ask these types of questions and provide very little context or info. And just do it yourself.
+Like Reactions:paladin5897 and zgfg
+zakir786lrk
+Member
+Jan 17, 2026
+#23
+chaoscreater said:
+Sure, just give me your bank account. How the hell do I check if it works if I don't even bank with them?
+
+Don't ask these types of questions and provide very little context or info. And just do it yourself.
+1000181681.jpgActually you dont need account to check if it works. Simply install the app and open it. If it doesn't show this screen then it works otherwise it doesn't.
+chaoscreater
+chaoscreater
+Senior Member
+Jan 17, 2026
+#24
+zakir786lrk said:
+View attachment 6308714Actually you dont need account to check if it works. Simply install the app and open it. If it doesn't show this screen then it works otherwise it doesn't.
+
+
+I don't get that screen at all. I can open it normally.
+
+From now on, please don't ask me for help on this stuff. Follow the guide and if it doesn't work, then it doesn't work. I don't have the time nor the care to assist with these things. This is the only time I'm testing for someone else, that's it.
+Last edited: Jan 18, 2026
+LikeAngry Reactions:ywliu and Max527
+wowie1012
+New member
+Jan 19, 2026
+#25
+Update from last time I was able to get all integrities by clicking action on Integrity Box once.
+
+I restarted my phone and got a bootloop (this might be unrelated to this whole root thing, just some new modules I installed caused it). Then I think YABL disabled all modules for me so I can enter my phone. After enabling all modules again and removed the ones causing the problem, suddenly my phone doesn't pass strong integrity anymore. No matter how many times I retry the guide's Play Integrity section it never got strong integrity anymore.
+
+After some back and forth, I tried your updated version of this guide with Yuri Keybox and HMA-OSS. HMA-OSS seems like an enhanced version of HMAL, plus there are no problems, so I'm going with it. But after I click action Yuri Keybox, and then reboot, I lost ALL integrities. Without reboot is the same thing. And then I noticed Integrity Box at least gives me device integrity every time, but Yuri Keybox loses everything every time. Even without reboot, like literally I check Play Integrity right after clicking action on both modules and only Integrity Box gives me the device integrity. So right now, I'm still sticking with Integrity Box with just device integrity (which is enough for me anyway, because hiding root is more important for me).
+
+I do follow your guide step by step, specifically the deleting tricky_store folder part, which I always need to do when trying again. The thing I didn't do is starting from scratch, I just replaced the ones your guide updated, so maybe something went wrong there. Either way I won't bother to redo everything again since I don't really need strong integrity. This is just me sharing some info.
+
+One more thing is that I think I know why Shamiko "didn't work" for me, and Zygisk Assistant "worked." I thought it would appear in the modules list in the Zygisk Next UI, Shamiko didn't, but Zygisk Assistant did. I read somewhere and turns out Shamiko is already merged into Zygisk Next, and it is the Denylist Policy setting (along the bottom of Zygisk Next UI), I had to choose "Umount only." Additionally I enabled the two settings below it "Use anonymous memory" and "Use Zygisk Next linker" because that source told me to, but I think just setting to Umount only is enough. The proof is that I deleted Shamiko, and Zygisk assistant as well, and it still successfully hides root when I changed that setting.
+
+And regarding accessibility settings, one app in my case (which is not on your list of examples) do detect that, so that's why I personally need a module to prevent that.
+Last edited: Jan 20, 2026
+chaoscreater
+chaoscreater
+Senior Member
+Jan 20, 2026
+#26
+wowie1012 said:
+Update from last time I was able to get all integrities by clicking action on Integrity Box once.
+
+I restarted my phone and got a bootloop (this might be unrelated to this whole root thing, just some new modules I installed caused it). Then I think YABL disabled all modules for me so I can enter my phone. After enabling all modules again and removed the ones causing the problem, suddenly my phone doesn't pass strong integrity anymore. No matter how many times I retry the guide's Play Integrity section it never got strong integrity anymore.
+
+After some back and forth, I tried your updated version of this guide with Yuri Keybox and HMA-OSS. HMA-OSS seems like an enhanced version of HMAL, plus there are no problems, so I'm going with it. But after I click action Yuri Keybox, and then reboot, I lost ALL integrities. Without reboot is the same thing. And then I noticed Integrity Box at least gives me device integrity every time, but Yuri Keybox loses everything every time. Even without reboot, like literally I check Play Integrity right after clicking action on both modules and only Integrity Box gives me the device integrity. So right now, I'm still sticking with Integrity Box with just device integrity (which is enough for me anyway, because hiding root is more important for me).
+
+I do follow your guide step by step, specifically the deleting tricky_store folder part, which I always need to do when trying again. The thing I didn't do is starting from scratch, I just replaced the ones your guide updated, so maybe something went wrong there. Either way I won't bother to redo everything again since I don't really need strong integrity. This is just me sharing some info.
+
+One more thing is that I think I know why Shamiko "didn't work" for me, and Zygisk Assistant "worked." I thought it would appear in the modules list in the Zygisk Next UI, Shamiko didn't, but Zygisk Assistant did. I read somewhere and turns out Shamiko is already merged into Zygisk Next, and it is the Denylist Policy setting (along the bottom of Zygisk Next UI), I had to choose "Umount only." Additionally I enabled the two settings below it "Use anonymous memory" and "Use Zygisk Next linker" because that source told me to, but I think just setting to Umount only is enough. The proof is that I deleted Shamiko, and Zygisk assistant as well, and it still successfully hides root when I changed that setting.
+
+And regarding accessibility settings, one app in my case (which is not on your list of examples) do detect that, so that's why I personally need a module to prevent that.
+Click to expand...
+keyboxes are soft-banned, that's why they're not giving you strong integrity. I'm only getting Device Integrity now as well, but everything else still works fine, including Company Portal. I even have unauthorized apps sideloaded into my Work Profile and they don't trigger any compliance scan checks. I updated the guide regarding this bit, in case anyone's into MDM policies tampering / bypassing.
+
+And use Rezygisk + Treat Wheels. Zygisk Next isn't as good and like you found out, you have to tweak a few settings here and there. Just save yourself the hassle and follow the guide 100%.
+
+Also, you don't have to delete the entire tricky_store folder to "start again". If something breaks, it's either the keyboxes, or the PIF fingerprint. You just need to replace the keybox.xml and the PIF fingerprint with a new and working one. If you install a new app to your phone and it needs to have root detection bypassed, then just use Tricky Store to select the app and save. It'll make the app use the keybox in your tricky_store folder. Or, you could just manually update the target.txt file by adding your newly installed app in there. There's no need to redo the entire guide from step 0.
+
+The guide is meant to serve as a guidance on how things work and what each piece of the puzzle do. You need to think about what the issue is and then troubleshoot and fix things accordingly. I figured out everything on my own, with a lot of research as well. Don't follow the guide blindly.
