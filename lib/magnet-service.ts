@@ -233,7 +233,29 @@ export function destroyAllTorrents() {
     }
 }
 
-export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): Promise<WebTorrent.TorrentFile | null> => {
+type FileKind = 'any' | 'video' | 'subtitle';
+
+function getFileExtension(name: string): string {
+    const idx = name.lastIndexOf('.');
+    if (idx === -1) return '';
+    return name.slice(idx).toLowerCase();
+}
+
+function isVideoFile(name: string): boolean {
+    const ext = getFileExtension(name);
+    return ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v'].includes(ext);
+}
+
+function isSubtitleFile(name: string): boolean {
+    const ext = getFileExtension(name);
+    return ['.srt', '.vtt', '.ass', '.ssa', '.sub'].includes(ext);
+}
+
+function isLikelySample(name: string): boolean {
+    return /sample|trailer|preview/i.test(name);
+}
+
+export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0, kind: FileKind = 'any'): Promise<WebTorrent.TorrentFile | null> => {
     const normalized = normalizeInfoHash(infoHash);
     const client = getMagnetClient();
     const trParams = DEFAULT_TRACKERS.map(t => `&tr=${encodeURIComponent(t)}`).join('');
@@ -308,18 +330,46 @@ export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): 
     }
     
     // Select File
-    // If fileIdx is provided, use it. Otherwise find largest file (video)
+    // If fileIdx points to an incompatible file for requested kind, fallback to best matching file.
     let file: WebTorrent.TorrentFile;
     
     const safeFileIdx = Number.isFinite(fileIdx) ? Number(fileIdx) : -1;
 
-    if (safeFileIdx >= 0 && torrent.files[safeFileIdx]) {
-        file = torrent.files[safeFileIdx];
-    } else if (fileIdx === 0 && torrent.files[0] && torrent.files.length === 1) {
-        file = torrent.files[fileIdx];
+    const requested = safeFileIdx >= 0 && torrent.files[safeFileIdx] ? torrent.files[safeFileIdx] : null;
+
+    const pickLargestVideo = () => {
+        const videos = torrent.files
+            .filter((f) => isVideoFile(f.name))
+            .filter((f) => !isLikelySample(f.name) || f.length > 300 * 1024 * 1024);
+        if (videos.length > 0) {
+            return videos.reduce((a, b) => a.length > b.length ? a : b);
+        }
+        return torrent.files.reduce((a, b) => a.length > b.length ? a : b);
+    };
+
+    const pickSubtitle = () => {
+        const subtitles = torrent.files.filter((f) => isSubtitleFile(f.name));
+        if (!subtitles.length) return null;
+        return subtitles[0];
+    };
+
+    if (kind === 'subtitle') {
+        if (requested && isSubtitleFile(requested.name)) {
+            file = requested;
+        } else {
+            const subtitle = pickSubtitle();
+            if (!subtitle) return null;
+            file = subtitle;
+        }
+    } else if (kind === 'video') {
+        if (requested && isVideoFile(requested.name) && !isLikelySample(requested.name)) {
+            file = requested;
+        } else {
+            file = pickLargestVideo();
+        }
     } else {
-        // Find largest
-        file = torrent.files.reduce((a, b) => a.length > b.length ? a : b);
+        if (requested) file = requested;
+        else file = pickLargestVideo();
     }
     
     // Deselect others to save bandwidth

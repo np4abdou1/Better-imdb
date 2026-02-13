@@ -14,10 +14,11 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
     }
     const searchParams = new URL(request.url).searchParams;
     const fileIdx = Number(searchParams.get('fileIdx') || 0);
+    const kind = searchParams.get('kind') === 'subtitle' ? 'subtitle' : 'video';
     const rangeHeader = request.headers.get('range');
 
     try {
-        const file = await getFileFromMagnet(infoHash, fileIdx);
+        const file = await getFileFromMagnet(infoHash, fileIdx, kind);
         
         if (!file) {
             return new NextResponse('File not found or timeout', { status: 404 });

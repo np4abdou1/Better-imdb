@@ -447,7 +447,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                 ...s,
                 source: 'Embedded',
                 lang: s.lang || 'unknown',
-                src: `/api/stream/magnet/${hash}?fileIdx=${s.fileIdx}`
+                src: `/api/stream/magnet/${hash}?fileIdx=${s.fileIdx}&kind=subtitle`
               }));
               setSubtitles(prev => [...prev, ...mapped]);
             }
@@ -842,13 +842,16 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
         transition={{ opacity: { duration: 0.6 }, scale: { duration: 0.5, ease: 'easeOut' }, filter: { duration: 0.5 } }}
       >
         <video
+          key={streamUrl || 'empty-stream'}
           ref={videoRef}
           className="w-full h-full object-contain"
           src={streamUrl && !streamUrl.startsWith('magnet:') ? streamUrl : undefined}
           autoPlay
           playsInline
           onError={() => {
-             setError(`Playback failed for ${currentSource?.name || 'source'}`);
+             attemptAutoFallback('playback-error').catch(() => {
+               setError(`Playback failed for ${currentSource?.name || 'source'}`);
+             });
           }}
           onTimeUpdate={() => {
             const v = videoRef.current;
@@ -880,7 +883,18 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
             }, 1200);
           }}
           onWaiting={() => setWaiting(true)}
-          onPlaying={() => { setWaiting(false); setPlaying(true); setIsPaused(false); }}
+          onPlaying={() => {
+            setWaiting(false);
+            setPlaying(true);
+            setIsPaused(false);
+
+            const v = videoRef.current;
+            if (!v) return;
+            if (!muted && v.muted) v.muted = false;
+            if (!muted && v.volume === 0) {
+              v.volume = volume > 0 ? volume : 1;
+            }
+          }}
           onPause={() => setPlaying(false)}
           onEnded={() => { setPlaying(false); setShowControls(true); }}
         >
