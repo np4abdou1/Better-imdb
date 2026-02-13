@@ -105,6 +105,11 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
       const hasAC3 = /\bac3\b(?!\+)/i.test(combinedText);
       const hasDTS = /\bdts\b|\bdtshd\b/i.test(combinedText);
       const hasTrueHD = /\btruehd\b/i.test(combinedText);
+      const hasDualOrMultiAudio = /dual[-\s]?audio|multi[-\s]?audio|multiple\s+audio|2\s*audio|multi\s+lang/i.test(combinedText);
+      const hasMultiSubsPack = /multi[-\s]?sub|multiple\s+sub|subs?\s*:\s*\d+|\[(?:[^\]]*sub[^\]]*)\]/i.test(combinedText);
+      const isTenBit = /\b10\s*bit\b|\b10bit\b/i.test(combinedText);
+      const hasDolbyVision = /dolby\s*vision|\bdv\b/i.test(combinedText);
+      const hasHDR = /\bhdr\b|hdr10\+?/i.test(combinedText);
 
       let audioCodec: string | undefined;
       if (hasAAC) audioCodec = 'AAC';
@@ -126,6 +131,8 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
       if (seeds > 0) infoParts.push(`👤 ${seeds}`);
       if (isHevc) infoParts.push('HEVC'); 
       if (audioCodec) infoParts.push(audioCodec);
+      if (hasDualOrMultiAudio) infoParts.push('Multi-Audio');
+      if (hasMultiSubsPack) infoParts.push('Multi-Sub');
       const displayInfo = infoParts.length > 0 ? infoParts.join('  ') : filename.substring(0, 30);
 
       // Web Compatibility Score for Sorting
@@ -146,6 +153,11 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
       if (hasEAC3 || hasDTS || hasTrueHD) score -= 7000; // Common "video plays but no audio" sources
       if (hasAC3) score -= 1500;
       if (hasMultiChannelAudio && !hasAAC && !hasOpus) score -= 2200;
+      if (hasDualOrMultiAudio) score += 900; // Keep quality multi-audio releases competitive
+      if (hasMultiSubsPack) score += 250;
+      if (isTenBit) score -= 1800;
+      if (hasDolbyVision) score -= 1800;
+      if (hasHDR && !isH264) score -= 1200;
 
       return {
         id: `torrentio-${normalizedInfoHash}-${fileIdx}-${index}`,

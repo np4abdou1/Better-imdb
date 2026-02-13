@@ -136,6 +136,9 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const [currentSubtitle, setCurrentSubtitle] = useState(-1); // -1 = off
   const [expandedLang, setExpandedLang] = useState<string | null>(null); // For grouped subtitle menu
   const [activeCueText, setActiveCueText] = useState('');
+  const [audioTracks, setAudioTracks] = useState<{ index: number; label: string; language?: string; enabled: boolean }[]>([]);
+  const [showAudioMenu, setShowAudioMenu] = useState(false);
+  const [currentAudioTrack, setCurrentAudioTrack] = useState(0);
   
   // Player
   const videoRef = useRef(null);
@@ -237,6 +240,57 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const volumeTimeoutRef = useRef(null);
   const autoFallbackTriedRef = useRef<Set<string>>(new Set());
+
+  const syncAudioTracks = useCallback(() => {
+    const videoAny = videoRef.current as any;
+    const tracks = videoAny?.audioTracks;
+
+    if (!tracks || typeof tracks.length !== 'number') {
+      setAudioTracks([]);
+      return;
+    }
+
+    if (tracks.length > 0) {
+      let hasEnabled = false;
+      for (let i = 0; i < tracks.length; i++) {
+        if (tracks[i]?.enabled) {
+          hasEnabled = true;
+          break;
+        }
+      }
+      if (!hasEnabled && tracks[0]) {
+        tracks[0].enabled = true;
+      }
+    }
+
+    const parsed: { index: number; label: string; language?: string; enabled: boolean }[] = [];
+    for (let i = 0; i < tracks.length; i++) {
+      const track = tracks[i];
+      parsed.push({
+        index: i,
+        label: track?.label || track?.language || `Audio ${i + 1}`,
+        language: track?.language || '',
+        enabled: !!track?.enabled,
+      });
+    }
+
+    setAudioTracks(parsed);
+    const active = parsed.find((t) => t.enabled);
+    if (active) setCurrentAudioTrack(active.index);
+  }, []);
+
+  const selectAudioTrack = useCallback((index: number) => {
+    const videoAny = videoRef.current as any;
+    const tracks = videoAny?.audioTracks;
+    if (!tracks || typeof tracks.length !== 'number') return;
+
+    for (let i = 0; i < tracks.length; i++) {
+      tracks[i].enabled = i === index;
+    }
+    setCurrentAudioTrack(index);
+    syncAudioTracks();
+    setShowAudioMenu(false);
+  }, [syncAudioTracks]);
 
   // Keep media element audio state in sync when switching sources (TopCinema <-> Torrent)
   useEffect(() => {
@@ -398,6 +452,37 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   useEffect(() => {
     autoFallbackTriedRef.current.clear();
   }, [id, season, episode]);
+
+  useEffect(() => {
+    setAudioTracks([]);
+    setCurrentAudioTrack(0);
+    setShowAudioMenu(false);
+  }, [streamUrl, currentSource?.id]);
+
+  useEffect(() => {
+    const videoAny = videoRef.current as any;
+    const tracks = videoAny?.audioTracks;
+    if (!tracks || typeof tracks.length !== 'number') return;
+
+    const onTrackChange = () => syncAudioTracks();
+    try {
+      tracks.addEventListener?.('change', onTrackChange);
+      tracks.addEventListener?.('addtrack', onTrackChange);
+      tracks.addEventListener?.('removetrack', onTrackChange);
+    } catch {}
+
+    const interval = setInterval(syncAudioTracks, 1500);
+    syncAudioTracks();
+
+    return () => {
+      clearInterval(interval);
+      try {
+        tracks.removeEventListener?.('change', onTrackChange);
+        tracks.removeEventListener?.('addtrack', onTrackChange);
+        tracks.removeEventListener?.('removetrack', onTrackChange);
+      } catch {}
+    };
+  }, [syncAudioTracks, streamUrl]);
 
   // Fetch Subtitles
   useEffect(() => {
@@ -881,6 +966,8 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                 attemptAutoFallback('no-video-track');
               }
             }, 1200);
+
+            syncAudioTracks();
           }}
           onWaiting={() => setWaiting(true)}
           onPlaying={() => {
@@ -894,6 +981,8 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
             if (!muted && v.volume === 0) {
               v.volume = volume > 0 ? volume : 1;
             }
+
+            syncAudioTracks();
           }}
           onPause={() => setPlaying(false)}
           onEnded={() => { setPlaying(false); setShowControls(true); }}
@@ -1093,6 +1182,57 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
                 {/* Right */}
                 <div className="flex items-center gap-4">
+
+                  {audioTracks.length > 1 && (
+                    <div className="relative">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowAudioMenu(!showAudioMenu);
+                          setShowSubtitleMenu(false);
+                          setShowSourceSelector(false);
+                        }}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                        title="Audio Tracks"
+                      >
+                        <Tv size={18} />
+                        <span className="text-[11px] font-bold">AUDIO</span>
+                      </button>
+
+                      <AnimatePresence>
+                        {showAudioMenu && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 8 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 8 }}
+                            className="absolute bottom-full right-0 mb-3 w-64 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="p-3 border-b border-white/10 bg-white/5">
+                              <h4 className="text-xs font-bold text-white/90 uppercase tracking-wider">Audio Tracks</h4>
+                            </div>
+                            <div className="max-h-[240px] overflow-y-auto py-1 scrollbar-thin scrollbar-thumb-white/10">
+                              {audioTracks.map((track) => (
+                                <button
+                                  key={track.index}
+                                  onClick={() => selectAudioTrack(track.index)}
+                                  className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${currentAudioTrack === track.index ? 'text-white' : 'text-zinc-400'}`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="truncate">{track.label}</span>
+                                    {track.language && (
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 font-bold uppercase shrink-0">{track.language}</span>
+                                    )}
+                                  </div>
+                                  {currentAudioTrack === track.index && <Check size={14} className="text-emerald-400 shrink-0" />}
+                                </button>
+                              ))}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
                   
                   {/* Subtitles / CC */}
                   <div className="relative">
