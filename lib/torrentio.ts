@@ -26,6 +26,8 @@ export interface StreamSource {
   filename?: string;
   codec?: string;
   audioCodec?: string;
+  audioLanguages?: string[];
+  audioMode?: string;
   infoHash?: string;
 }
 
@@ -111,6 +113,39 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
       const hasDolbyVision = /dolby\s*vision|\bdv\b/i.test(combinedText);
       const hasHDR = /\bhdr\b|hdr10\+?/i.test(combinedText);
 
+      const detectAudioLanguages = (value: string): string[] => {
+        const text = value.toUpperCase();
+        const langs = new Set<string>();
+
+        const tokenMap: Array<[RegExp, string]> = [
+          [/\bENG\b|\bENGLISH\b|🇬🇧|🇺🇸/i, 'English'],
+          [/\bJPN\b|\bJAP\b|\bJAPANESE\b|🇯🇵/i, 'Japanese'],
+          [/\bITA\b|\bITALIAN\b|🇮🇹/i, 'Italian'],
+          [/\bARA\b|\bARABIC\b|🇸🇦|🇪🇬/i, 'Arabic'],
+          [/\bESP\b|\bSPA\b|\bSPANISH\b|🇪🇸/i, 'Spanish'],
+          [/\bLAT\b|\bLATAM\b|\bES-LA\b|🇲🇽/i, 'Spanish (LatAm)'],
+          [/\bPOR\b|\bPORTUGUESE\b|\bPT-BR\b|🇵🇹|🇧🇷/i, 'Portuguese'],
+          [/\bDEU\b|\bGER\b|\bGERMAN\b|🇩🇪/i, 'German'],
+          [/\bFRE\b|\bFRA\b|\bFRENCH\b|🇫🇷/i, 'French'],
+          [/\bRUS\b|\bRUSSIAN\b|🇷🇺/i, 'Russian'],
+          [/\bKOR\b|\bKOREAN\b|🇰🇷/i, 'Korean'],
+          [/\bCHI\b|\bCHINESE\b|🇨🇳/i, 'Chinese'],
+          [/\bHIN\b|\bHINDI\b|🇮🇳/i, 'Hindi'],
+        ];
+
+        for (const [regex, label] of tokenMap) {
+          if (regex.test(text)) langs.add(label);
+        }
+
+        return Array.from(langs);
+      };
+
+      const audioLanguages = detectAudioLanguages(combinedText);
+
+      let audioMode = 'Single Audio';
+      if (hasDualOrMultiAudio && audioLanguages.length > 2) audioMode = 'Multi Audio';
+      else if (hasDualOrMultiAudio || audioLanguages.length === 2) audioMode = 'Dual Audio';
+
       let audioCodec: string | undefined;
       if (hasAAC) audioCodec = 'AAC';
       else if (hasOpus) audioCodec = 'Opus';
@@ -133,6 +168,7 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
       if (audioCodec) infoParts.push(audioCodec);
       if (hasDualOrMultiAudio) infoParts.push('Multi-Audio');
       if (hasMultiSubsPack) infoParts.push('Multi-Sub');
+      if (audioLanguages.length > 0) infoParts.push(audioLanguages.slice(0, 3).join('/'));
       const displayInfo = infoParts.length > 0 ? infoParts.join('  ') : filename.substring(0, 30);
 
       // Web Compatibility Score for Sorting
@@ -172,6 +208,8 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
         filename,
         codec: isHevc ? 'HEVC' : isH264 ? 'H.264' : undefined,
         audioCodec,
+        audioLanguages,
+        audioMode,
         infoHash: normalizedInfoHash,
         _score: score
       };

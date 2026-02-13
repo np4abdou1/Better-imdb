@@ -29,6 +29,8 @@ export interface StreamSource {
   filename?: string;
   codec?: string;
   audioCodec?: string;
+  audioLanguages?: string[];
+  audioMode?: string;
   infoHash?: string;
 }
 
@@ -794,6 +796,12 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     return /dual[-\s]?audio|multi[-\s]?audio|multiple\s+audio/.test(info);
   }, [isP2P, audioTracks.length, relatedAudioVariants.length, currentSource]);
 
+  const metadataAudioTracks = useMemo(() => {
+    const langs = currentSource?.audioLanguages || [];
+    if (!langs.length) return [] as { index: number; label: string }[];
+    return langs.map((label, index) => ({ index, label }));
+  }, [currentSource?.audioLanguages]);
+
   const torrentInfoLine = useMemo(() => {
     if (serverTorrentStats) {
       return `Peers ${serverTorrentStats.numPeers} • Server ${formatSpeed(serverTorrentStats.downloadSpeed)} • Client ${formatSpeed(serverTorrentStats.deliveredSpeed || 0)} • ${(serverTorrentStats.progress * 100).toFixed(0)}%`;
@@ -1260,6 +1268,34 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                                 </>
                               )}
 
+                              {metadataAudioTracks.length > 0 && (
+                                <>
+                                  <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider text-white/40 font-bold border-t border-white/5 mt-1">Detected Audio Languages</div>
+                                  {metadataAudioTracks.map((track) => (
+                                    <button
+                                      key={`meta-audio-${track.index}`}
+                                      onClick={async () => {
+                                        const preferred = relatedAudioVariants.find((variant) => {
+                                          const langs = (variant.audioLanguages || []).map((l) => l.toLowerCase());
+                                          return langs.includes(track.label.toLowerCase());
+                                        });
+
+                                        if (preferred && preferred.id !== currentSource?.id) {
+                                          await changeSource(preferred);
+                                        }
+
+                                        setShowAudioMenu(false);
+                                      }}
+                                      className="w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors text-zinc-300"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <span className="truncate">{track.label}</span>
+                                      </div>
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+
                               {relatedAudioVariants.length > 1 && (
                                 <>
                                   <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider text-white/40 font-bold border-t border-white/5 mt-1">Source Variants</div>
@@ -1287,7 +1323,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                                 </>
                               )}
 
-                              {audioTracks.length <= 1 && relatedAudioVariants.length <= 1 && (
+                              {audioTracks.length <= 1 && relatedAudioVariants.length <= 1 && metadataAudioTracks.length === 0 && (
                                 <div className="px-4 py-3 text-xs text-white/40">
                                   This source does not expose switchable container audio tracks in this browser.
                                 </div>
