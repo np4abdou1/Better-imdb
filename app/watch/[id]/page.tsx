@@ -242,6 +242,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const volumeTimeoutRef = useRef(null);
   const autoFallbackTriedRef = useRef<Set<string>>(new Set());
+  const audioCompatSwitchTriedRef = useRef<Set<string>>(new Set());
 
   const syncAudioTracks = useCallback(() => {
     const videoAny = videoRef.current as any;
@@ -422,6 +423,59 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     return hasHevc || hasAv1 || riskyAudio;
   }, []);
 
+  const isRiskyAudioCodec = useCallback((codec?: string) => {
+    if (!codec) return false;
+    const value = codec.toLowerCase();
+    return value.includes('eac3') || value.includes('dts') || value.includes('truehd') || value.includes('ddp');
+  }, []);
+
+  const scoreAudioCompatibility = useCallback((source: StreamSource, baseline?: StreamSource | null) => {
+    const codec = (source.audioCodec || '').toLowerCase();
+    let score = 0;
+
+    if (codec.includes('aac')) score += 1400;
+    else if (codec.includes('opus')) score += 1200;
+    else if (codec.includes('ac3')) score += 300;
+    else if (codec.includes('eac3') || codec.includes('ddp')) score -= 900;
+    else if (codec.includes('dts')) score -= 1300;
+    else if (codec.includes('truehd')) score -= 1600;
+    else score += 100;
+
+    score += Math.min(800, source.seeds || 0);
+
+    if (baseline?.quality && source.quality === baseline.quality) score += 400;
+    if (baseline?.infoHash && source.infoHash === baseline.infoHash) score += 300;
+
+    return score;
+  }, []);
+
+  const pickBestCompatibleAudioSource = useCallback((current?: StreamSource | null): StreamSource | null => {
+    if (!current) return null;
+
+    const p2pSources = sources.filter((s) => s.type === 'p2p' && s.id !== current.id);
+    if (!p2pSources.length) return null;
+
+    const preferredPool = p2pSources.filter((s) => {
+      const sameHash = current.infoHash && s.infoHash === current.infoHash;
+      const sameQuality = current.quality && s.quality === current.quality;
+      return sameHash || sameQuality;
+    });
+
+    const pool = preferredPool.length ? preferredPool : p2pSources;
+    const scored = pool
+      .map((candidate) => ({ candidate, score: scoreAudioCompatibility(candidate, current) }))
+      .sort((a, b) => b.score - a.score);
+
+    const best = scored[0]?.candidate || null;
+    if (!best) return null;
+
+    const currentScore = scoreAudioCompatibility(current, current);
+    const bestScore = scoreAudioCompatibility(best, current);
+
+    if (bestScore <= currentScore) return null;
+    return best;
+  }, [sources, scoreAudioCompatibility]);
+
   const findFallbackSource = useCallback((failed?: StreamSource | null): StreamSource | null => {
     if (!failed || sources.length <= 1) return null;
 
@@ -454,6 +508,23 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   useEffect(() => {
     autoFallbackTriedRef.current.clear();
   }, [id, season, episode]);
+
+  useEffect(() => {
+    const currentIsP2P = currentSource?.type === 'p2p' || !!(streamUrl && streamUrl.startsWith('magnet:'));
+    if (!currentIsP2P || !currentSource) return;
+
+    const sourceId = currentSource.id;
+    if (audioCompatSwitchTriedRef.current.has(sourceId)) return;
+
+    if (!isRiskyAudioCodec(currentSource.audioCodec)) return;
+
+    const compatible = pickBestCompatibleAudioSource(currentSource);
+    if (!compatible) return;
+
+    audioCompatSwitchTriedRef.current.add(sourceId);
+    setLastLog(`Switching to compatible audio source (${compatible.audioCodec || 'AAC'})...`);
+    changeSource(compatible).catch(() => {});
+  }, [currentSource, streamUrl, isRiskyAudioCodec, pickBestCompatibleAudioSource]);
 
   useEffect(() => {
     setAudioTracks([]);
@@ -1275,10 +1346,14 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                                     <button
                                       key={`meta-audio-${track.index}`}
                                       onClick={async () => {
-                                        const preferred = relatedAudioVariants.find((variant) => {
+                                        const candidates = relatedAudioVariants.filter((variant) => {
                                           const langs = (variant.audioLanguages || []).map((l) => l.toLowerCase());
                                           return langs.includes(track.label.toLowerCase());
                                         });
+
+                                        const preferred = candidates
+                                          .map((variant) => ({ variant, score: scoreAudioCompatibility(variant, currentSource) }))
+                                          .sort((a, b) => b.score - a.score)[0]?.variant;
 
                                         if (preferred && preferred.id !== currentSource?.id) {
                                           await changeSource(preferred);
