@@ -10,11 +10,36 @@ import {
   Play, Pause, Volume2, VolumeX, Volume1, Maximize, Minimize, 
   ArrowLeft, RotateCcw, RotateCw, 
   Loader2, ListVideo, X, ChevronRight, ChevronDown, Layers, Check, Signal, Captions,
-  HardDrive, Users, Tv
+  HardDrive, Users, Tv, FileVideo, Headphones, Globe, Zap, Info
 } from 'lucide-react';
 
-const RESOLVE_API = '/api/stream/resolve'; // Deprecated
 const SOURCES_API = '/api/stream/sources';
+
+// --- Track types from ffprobe API ---
+interface ProbeTrack {
+  index: number;
+  trackIndex: number;
+  type: 'audio' | 'subtitle';
+  codec: string;
+  codecLong?: string;
+  language?: string;
+  title?: string;
+  channels?: number;
+  channelLayout?: string;
+  sampleRate?: number;
+  bitRate?: number;
+  isDefault?: boolean;
+  isForced?: boolean;
+}
+
+interface ProbeData {
+  audio: ProbeTrack[];
+  subtitle: ProbeTrack[];
+  video: { codec?: string; width?: number; height?: number; fps?: string; bitRate?: number } | null;
+  filename: string;
+  fileSize: number;
+  duration?: number;
+}
 
 export interface StreamSource {
   id: string;
@@ -43,6 +68,21 @@ const formatTime = (seconds) => {
   const s = Math.floor(seconds % 60);
   if (h > 0) return `${h}:${m < 10 ? '0' + m : m}:${s < 10 ? '0' + s : s}`;
   return `${m}:${s < 10 ? '0' + s : s}`;
+};
+
+const formatBytes = (bytes?: number) => {
+  if (!bytes || bytes === 0) return '';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' GB';
+  return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' TB';
+};
+
+const formatDuration = (seconds?: number) => {
+  if (!seconds) return '';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 };
 
 // Clean raw backend logs into minimal user-facing text
@@ -80,6 +120,22 @@ const getInfoHashFromStreamUrl = (url?: string | null) => {
   if (!url) return null;
   const match = url.match(/\/api\/stream\/magnet\/([a-fA-F0-9]{40})/);
   return match ? match[1] : null;
+};
+
+const getLangLabel = (code?: string) => {
+  if (!code) return 'Unknown';
+  const map: Record<string, string> = {
+    eng: 'English', en: 'English', jpn: 'Japanese', ja: 'Japanese',
+    ara: 'Arabic', ar: 'Arabic', spa: 'Spanish', es: 'Spanish',
+    fre: 'French', fr: 'French', ger: 'German', de: 'German',
+    ita: 'Italian', it: 'Italian', por: 'Portuguese', pt: 'Portuguese',
+    rus: 'Russian', ru: 'Russian', kor: 'Korean', ko: 'Korean',
+    chi: 'Chinese', zh: 'Chinese', hin: 'Hindi', hi: 'Hindi',
+    tur: 'Turkish', tr: 'Turkish', dut: 'Dutch', nl: 'Dutch',
+    swe: 'Swedish', sv: 'Swedish', pol: 'Polish', pl: 'Polish',
+    und: 'Undetermined',
+  };
+  return map[code.toLowerCase()] || code.toUpperCase();
 };
 
 const hasArabicCharacters = (value?: string) => {
@@ -133,7 +189,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const [showSourceSelector, setShowSourceSelector] = useState(false);
   
   // Subtitles
-  const [subtitles, setSubtitles] = useState<{label: string, fileIdx: number, src: string, lang?: string, source?: string}[]>([]);
+  const [subtitles, setSubtitles] = useState<{label: string, fileIdx: number, src: string, lang?: string, source?: string, provider?: string}[]>([]);
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
   const [currentSubtitle, setCurrentSubtitle] = useState(-1); // -1 = off
   const [expandedLang, setExpandedLang] = useState<string | null>(null); // For grouped subtitle menu
@@ -141,6 +197,14 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const [audioTracks, setAudioTracks] = useState<{ index: number; label: string; language?: string; enabled: boolean }[]>([]);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
   const [currentAudioTrack, setCurrentAudioTrack] = useState(0);
+  
+  // FFprobe data for current P2P source
+  const [probeData, setProbeData] = useState<ProbeData | null>(null);
+  const [probePending, setProbePending] = useState(false);
+  
+  // Torrent preview (show before playing P2P sources)
+  const [showTorrentPreview, setShowTorrentPreview] = useState(false);
+  const [pendingP2PSource, setPendingP2PSource] = useState<StreamSource | null>(null);
   
   // Player
   const videoRef = useRef(null);
@@ -289,31 +353,42 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   }, []);
 
   const selectAudioTrack = useCallback((index: number) => {
+    // For P2P streams with ffprobe data: use server-side transcoding
+    const isP2PStream = currentSource?.type === 'p2p' || (streamUrl && streamUrl.includes('/api/stream/magnet/'));
+    
+    if (isP2PStream && streamUrl && streamUrl.includes('/api/stream/magnet/')) {
+        const baseUrl = streamUrl.split('?')[0];
+        const currentParams = new URLSearchParams(streamUrl.split('?')[1] || '');
+        const fileIdx = currentParams.get('fileIdx') || '0';
+        
+        const newUrl = `${baseUrl}?fileIdx=${fileIdx}&transcode=1&audioIdx=${index}`;
+        setLastLog(`Switching to Audio Track ${index + 1} (Transcoding)...`);
+        setStreamUrl(newUrl);
+        setCurrentAudioTrack(index);
+        setShowAudioMenu(false);
+        return;
+    }
+
+    // Fallback: native browser track switching for non-P2P
     const videoAny = videoRef.current as any;
     const tracks = videoAny?.audioTracks;
     if (!tracks || typeof tracks.length !== 'number') return;
 
-    // Direct manipulation - first disable all, then enable target
-    // This sequence is often more reliable than just setting .enabled = i===index
     for (let i = 0; i < tracks.length; i++) {
        if (i !== index) tracks[i].enabled = false;
     }
     if (tracks[index]) tracks[index].enabled = true;
 
-    // Update local state immediately
     setCurrentAudioTrack(index);
-    
-    // Suspend sync for a moment to prevent overwriting local state with old browser state
     lastSyncTimeRef.current = Date.now();
     
-    // Force a re-read of tracks into local state slightly later
     setTimeout(() => {
        lastSyncTimeRef.current = 0;
        syncAudioTracks();
     }, 2100);
 
     setShowAudioMenu(false);
-  }, [syncAudioTracks]);
+  }, [syncAudioTracks, currentSource, streamUrl]);
 
   // Keep media element audio state in sync when switching sources (TopCinema <-> Torrent)
   useEffect(() => {
@@ -366,7 +441,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     fetchEpTitle();
   }, [id, season, episode, title]);
 
-  // Fetch Sources
+  // Fetch Sources — auto-play TopCinema, show preview for P2P
   useEffect(() => {
     if (loadingTitle) return;
     
@@ -376,6 +451,9 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     setCurrentSource(null);
     setStreamUrl(null);
     setLastLog('Searching sources...');
+    setShowTorrentPreview(false);
+    setPendingP2PSource(null);
+    setProbeData(null);
 
     const fetchSources = async () => {
       try {
@@ -400,10 +478,33 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
         if (foundSources.length > 0) {
             setLastLog(`Found ${foundSources.length} sources`);
-            const best = foundSources[0];
-            setCurrentSource(best);
-            setStreamUrl(best.url);
-            setResolving(false);
+            
+            // Auto-play logic: prefer TopCinema (direct streaming) 
+            const topCinemaSource = foundSources.find(s => s.id === 'topcinema' || s.website === 'TopCinema');
+            const p2pSources = foundSources.filter(s => s.type === 'p2p');
+            
+            if (topCinemaSource) {
+                // Auto-play TopCinema immediately
+                setCurrentSource(topCinemaSource);
+                setStreamUrl(topCinemaSource.url);
+                setResolving(false);
+            } else if (p2pSources.length > 0) {
+                // Show torrent preview for the best P2P source (don't auto-play)
+                const best = p2pSources[0];
+                setPendingP2PSource(best);
+                setCurrentSource(best);
+                setShowTorrentPreview(true);
+                setResolving(false);
+                
+                // Start probing the best source for track info
+                if (best.infoHash) {
+                    const fileIdx = best.url.match(/fileIdx=(\d+)/)?.[1] || '0';
+                    fetchProbeData(best.infoHash, fileIdx);
+                }
+            } else {
+                setError('No streams found for this title.');
+                setResolving(false);
+            }
         } else {
             setError('No streams found for this title.');
             setResolving(false);
@@ -418,15 +519,64 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     fetchSources();
   }, [id, season, episode, loadingTitle, title]); 
 
+  // Fetch ffprobe data for P2P sources
+  const fetchProbeData = useCallback(async (infoHash: string, fileIdx: string = '0') => {
+    setProbePending(true);
+    try {
+      const res = await fetch(`/api/stream/tracks/${infoHash}?fileIdx=${fileIdx}`);
+      if (res.ok) {
+        const data: ProbeData = await res.json();
+        setProbeData(data);
+      }
+    } catch (e) {
+      console.warn('[Probe] Failed to fetch track info:', e);
+    } finally {
+      setProbePending(false);
+    }
+  }, []);
+  
+  // Start playing a P2P source (from torrent preview or source selector)
+  const playP2PSource = useCallback(async (source: StreamSource) => {
+    await cleanupTorrent(streamUrl);
+    setShowTorrentPreview(false);
+    setPendingP2PSource(null);
+    setCurrentSource(source);
+    setStreamUrl(source.url);
+    setPlaying(true);
+    
+    // Probe tracks if not already probed for this source
+    if (source.infoHash && (!probeData || probeData.filename !== source.filename)) {
+      const fileIdx = source.url.match(/fileIdx=(\d+)/)?.[1] || '0';
+      fetchProbeData(source.infoHash, fileIdx);
+    }
+  }, [streamUrl, probeData, fetchProbeData]);
+
   const changeSource = async (source: StreamSource) => {
     // Cleanup current torrent before switching sources
     await cleanupTorrent(streamUrl);
     
-    setCurrentSource(source);
-    setStreamUrl(source.url);
-    setShowSourceSelector(false);
-    // Reset player specific stuff if needed
-    setPlaying(true);
+    if (source.type === 'p2p') {
+      // For P2P: show preview first instead of auto-playing
+      setPendingP2PSource(source);
+      setCurrentSource(source);
+      setShowTorrentPreview(true);
+      setStreamUrl(null);
+      setShowSourceSelector(false);
+      
+      // Start probing
+      if (source.infoHash) {
+        const fileIdx = source.url.match(/fileIdx=(\d+)/)?.[1] || '0';
+        fetchProbeData(source.infoHash, fileIdx);
+      }
+    } else {
+      // For HLS/MP4: play immediately
+      setShowTorrentPreview(false);
+      setPendingP2PSource(null);
+      setCurrentSource(source);
+      setStreamUrl(source.url);
+      setShowSourceSelector(false);
+      setPlaying(true);
+    }
   };
 
   const isLikelyIncompatibleSource = useCallback((source?: StreamSource | null) => {
@@ -550,6 +700,10 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     setAudioTracks([]);
     setCurrentAudioTrack(0);
     setShowAudioMenu(false);
+    // Reset probe data when source changes (will be re-fetched for new source)
+    if (!showTorrentPreview) {
+      setProbeData(null);
+    }
   }, [streamUrl, currentSource?.id]);
 
   useEffect(() => {
@@ -577,7 +731,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     };
   }, [syncAudioTracks, streamUrl]);
 
-  // Fetch Subtitles
+  // Fetch Subtitles (multi-provider + embedded)
   useEffect(() => {
     if (!id) return;
     setSubtitles([]);
@@ -590,6 +744,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
       params.append('episode', String(episode));
     }
     
+    // Fetch from multi-provider API (OpenSubtitles + SubSource + SubDL)
     fetch(`/api/stream/subtitles?${params}`)
       .then(res => res.json())
       .then(data => {
@@ -598,7 +753,8 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
             fileIdx: 9000 + i,
             label: s.label || s.lang,
             lang: s.lang || 'unknown',
-            source: 'OpenSubtitles',
+            source: s.provider || 'External',
+            provider: s.provider || 'External',
             src: `/api/proxy/subtitles?url=${encodeURIComponent(s.url)}&v=2`
           }));
           setSubtitles(mapped);
@@ -612,7 +768,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
       })
       .catch(e => console.error('[Subtitles] External fetch error:', e));
     
-    // Also check for embedded subs if magnet source
+    // Also check for sidecar subtitle files in torrent
     if (streamUrl) {
       const match = streamUrl.match(/magnet\/([a-fA-F0-9]{40})/);
       if (match) {
@@ -623,17 +779,50 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
             if (data.subtitles && data.subtitles.length > 0) {
               const mapped = data.subtitles.map((s: any) => ({
                 ...s,
-                source: 'Embedded',
+                source: 'Sidecar',
+                provider: 'Sidecar',
                 lang: s.lang || 'unknown',
                 src: `/api/stream/magnet/${hash}?fileIdx=${s.fileIdx}&kind=subtitle`
               }));
               setSubtitles(prev => [...prev, ...mapped]);
             }
           })
-          .catch(e => console.error('[Subtitles] Embedded fetch error:', e));
+          .catch(e => console.error('[Subtitles] Sidecar fetch error:', e));
       }
     }
   }, [id, season, episode, title, streamUrl]);
+
+  // Add embedded subtitle tracks from ffprobe detection
+  useEffect(() => {
+    if (!probeData || !probeData.subtitle.length) return;
+    const infoHash = currentSource?.infoHash || getInfoHashFromStreamUrl(streamUrl);
+    if (!infoHash) return;
+    
+    const fileIdx = streamUrl?.match(/fileIdx=(\d+)/)?.[1] || '0';
+    
+    // Only process text-based subtitles (skip PGS/VobSub bitmap subs)
+    const textSubs = probeData.subtitle.filter(t => {
+      const codec = (t.codec || '').toLowerCase();
+      return !['hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'pgs', 'vobsub'].includes(codec);
+    });
+    
+    if (textSubs.length === 0) return;
+    
+    const embeddedSubs = textSubs.map((track, i) => ({
+      fileIdx: 8000 + track.trackIndex,
+      label: track.title || `${getLangLabel(track.language)} ${track.isForced ? '(Forced)' : ''}`.trim(),
+      lang: track.language || 'unknown',
+      source: 'Embedded',
+      provider: 'Embedded',
+      src: `/api/stream/subtitle-extract/${infoHash}?fileIdx=${fileIdx}&trackIdx=${track.trackIndex}`
+    }));
+    
+    setSubtitles(prev => {
+      // Remove old embedded subs then add new ones
+      const filtered = prev.filter(s => s.provider !== 'Embedded');
+      return [...embeddedSubs, ...filtered];
+    });
+  }, [probeData, currentSource?.infoHash, streamUrl]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -881,6 +1070,8 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
   const showAudioControl = useMemo(() => {
     if (!isP2P) return false;
+    // Show if ffprobe found multiple audio tracks
+    if (probeData && probeData.audio.length > 1) return true;
     if (audioTracks.length > 0) return true;
     if (relatedAudioVariants.length > 1) return true;
     
@@ -889,13 +1080,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     
     const info = `${currentSource?.filename || ''} ${currentSource?.info || ''}`.toLowerCase();
     return /dual[-\s]?audio|multi[-\s]?audio|multiple\s+audio/.test(info);
-  }, [isP2P, audioTracks.length, relatedAudioVariants.length, currentSource]);
-
-  const metadataAudioTracks = useMemo(() => {
-    const langs = currentSource?.audioLanguages || [];
-    if (!langs.length) return [] as { index: number; label: string }[];
-    return langs.map((label, index) => ({ index, label }));
-  }, [currentSource?.audioLanguages]);
+  }, [isP2P, probeData, audioTracks.length, relatedAudioVariants.length, currentSource]);
 
   const torrentInfoLine = useMemo(() => {
     if (serverTorrentStats) {
@@ -948,11 +1133,11 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     return isArabicSubtitle(activeSubtitle || undefined, activeCueText);
   }, [activeSubtitle, activeCueText]);
 
-  // Group subtitles by language for the grouped menu
+  // Group subtitles by provider for structured menu
   const subtitleGroups = useMemo(() => {
     const groups: Record<string, typeof subtitles> = {};
     subtitles.forEach((sub) => {
-      const key = sub.label || sub.lang || 'Unknown';
+      const key = sub.provider || sub.source || 'Other';
       if (!groups[key]) groups[key] = [];
       groups[key].push(sub);
     });
@@ -1191,6 +1376,164 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
         )}
       </AnimatePresence>
 
+      {/* Torrent Preview Card */}
+      <AnimatePresence>
+        {showTorrentPreview && pendingP2PSource && !resolving && (
+          <motion.div 
+            key="torrent-preview"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-black z-35 flex items-center justify-center p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <motion.div 
+              initial={{ opacity: 0, y: 20, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.97 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              className="w-full max-w-2xl bg-neutral-900/95 backdrop-blur-2xl border border-white/10 rounded-2xl overflow-hidden shadow-2xl"
+            >
+              {/* Header */}
+              <div className="p-5 border-b border-white/10">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-[9px] bg-purple-500/20 text-purple-400 border border-purple-500/30 px-2 py-0.5 rounded-md font-bold tracking-wider">P2P</span>
+                      {pendingP2PSource.quality && pendingP2PSource.quality !== 'Unknown' && (
+                        <span className="text-[9px] bg-amber-500/15 text-amber-400 px-2 py-0.5 rounded-md font-bold">{pendingP2PSource.quality}</span>
+                      )}
+                      {pendingP2PSource.codec && (
+                        <span className={`text-[9px] px-2 py-0.5 rounded-md font-bold ${pendingP2PSource.codec === 'HEVC' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/10 text-white/50'}`}>{pendingP2PSource.codec}</span>
+                      )}
+                      {pendingP2PSource.audioCodec && (
+                        <span className="text-[9px] bg-sky-500/15 text-sky-400 px-2 py-0.5 rounded-md font-bold">{pendingP2PSource.audioCodec}</span>
+                      )}
+                    </div>
+                    <h3 className="text-sm text-white/90 font-medium leading-snug break-words line-clamp-2">
+                      {pendingP2PSource.filename || pendingP2PSource.name}
+                    </h3>
+                    {titleLine && (
+                      <p className="text-xs text-white/40 mt-1">{titleLine}</p>
+                    )}
+                  </div>
+                  <button 
+                    onClick={handleBack}
+                    className="text-white/30 hover:text-white transition-colors p-1 shrink-0"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                
+                {/* File stats row */}
+                <div className="flex items-center gap-4 mt-3 text-[10px] text-white/40">
+                  {pendingP2PSource.size && (
+                    <span className="flex items-center gap-1"><HardDrive size={11} /> {pendingP2PSource.size}</span>
+                  )}
+                  {(pendingP2PSource.seeds != null && pendingP2PSource.seeds > 0) && (
+                    <span className="flex items-center gap-1 text-emerald-400/70"><Users size={11} /> {pendingP2PSource.seeds} seeds</span>
+                  )}
+                  {probeData?.duration && (
+                    <span className="flex items-center gap-1"><FileVideo size={11} /> {formatDuration(probeData.duration)}</span>
+                  )}
+                  {probeData?.video && (
+                    <span className="flex items-center gap-1">{probeData.video.width}x{probeData.video.height}</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Track Info from ffprobe */}
+              {probePending && (
+                <div className="p-4 flex items-center justify-center gap-2 text-white/30 text-xs">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Analyzing tracks...</span>
+                </div>
+              )}
+              
+              {probeData && (
+                <div className="p-4 space-y-3">
+                  {/* Audio Tracks */}
+                  {probeData.audio.length > 0 && (
+                    <div>
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <Headphones size={12} className="text-white/40" />
+                        <span className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Audio Tracks ({probeData.audio.length})</span>
+                      </div>
+                      <div className="space-y-1">
+                        {probeData.audio.map((track) => (
+                          <div key={track.trackIndex} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-white/[0.03] hover:bg-white/[0.06] transition-colors">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-xs text-white/70">{track.title || getLangLabel(track.language)}</span>
+                              {track.isDefault && (
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400/70 font-bold">DEFAULT</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 text-[9px] text-white/30 shrink-0">
+                              {track.channels && (
+                                <span>{track.channels === 2 ? 'Stereo' : track.channels === 6 ? '5.1' : track.channels === 8 ? '7.1' : `${track.channels}ch`}</span>
+                              )}
+                              <span className="uppercase font-mono">{track.codec}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Subtitle Tracks */}
+                  {probeData.subtitle.length > 0 && (
+                    <div>
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <Captions size={12} className="text-white/40" />
+                        <span className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Embedded Subtitles ({probeData.subtitle.length})</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {probeData.subtitle.map((track) => {
+                          const isBitmap = ['hdmv_pgs_subtitle', 'dvd_subtitle', 'pgs', 'vobsub'].includes((track.codec || '').toLowerCase());
+                          return (
+                            <span 
+                              key={track.trackIndex}
+                              className={`text-[10px] px-2 py-1 rounded-md font-medium ${isBitmap ? 'bg-white/5 text-white/25' : 'bg-white/[0.06] text-white/50'}`}
+                              title={isBitmap ? 'Bitmap subtitle (non-extractable)' : track.codec}
+                            >
+                              {track.title || getLangLabel(track.language)}
+                              {track.isForced && ' (Forced)'}
+                              {isBitmap && ' (PGS)'}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div className="p-4 pt-0 flex items-center gap-3">
+                <button
+                  onClick={() => playP2PSource(pendingP2PSource)}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-white text-black font-semibold text-sm rounded-xl hover:bg-white/90 transition-colors active:scale-[0.98]"
+                >
+                  <Play size={16} fill="currentColor" />
+                  Play
+                </button>
+                {sources.length > 1 && (
+                  <button
+                    onClick={() => {
+                      setShowTorrentPreview(false);
+                      setShowSourceSelector(true);
+                    }}
+                    className="px-4 py-2.5 text-white/60 hover:text-white text-sm font-medium rounded-xl border border-white/10 hover:border-white/20 transition-colors"
+                  >
+                    Other Sources ({sources.length})
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Controls */}
       <AnimatePresence>
         {showControls && !resolving && (
@@ -1325,7 +1668,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                         className="flex items-center gap-1.5 px-2 py-1 rounded text-white/80 hover:text-white hover:bg-white/10 transition-colors"
                         title="Audio Tracks"
                       >
-                        <Tv size={18} />
+                        <Headphones size={18} />
                         <span className="text-[11px] font-bold">AUDIO</span>
                       </button>
 
@@ -1335,16 +1678,46 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                             initial={{ opacity: 0, y: 8 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: 8 }}
-                            className="absolute bottom-full right-0 mb-3 w-64 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50"
+                            className="absolute bottom-full right-0 mb-3 w-72 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50"
                             onClick={(e) => e.stopPropagation()}
                           >
                             <div className="p-3 border-b border-white/10 bg-white/5">
                               <h4 className="text-xs font-bold text-white/90 uppercase tracking-wider">Audio Tracks</h4>
                             </div>
-                            <div className="max-h-[240px] overflow-y-auto py-1 scrollbar-thin scrollbar-thumb-white/10">
-                              {audioTracks.length > 0 && (
+                            <div className="max-h-[280px] overflow-y-auto py-1 scrollbar-thin scrollbar-thumb-white/10">
+                              
+                              {/* FFprobe-detected tracks (primary for P2P) */}
+                              {probeData && probeData.audio.length > 0 && (
                                 <>
-                                  <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider text-white/40 font-bold">Container Tracks</div>
+                                  {probeData.audio.map((track) => (
+                                    <button
+                                      key={`probe-${track.trackIndex}`}
+                                      onClick={() => selectAudioTrack(track.trackIndex)}
+                                      className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${currentAudioTrack === track.trackIndex ? 'text-white' : 'text-zinc-400'}`}
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <span className="truncate">{track.title || getLangLabel(track.language)}</span>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                          {track.channels && (
+                                            <span className="text-[8px] px-1.5 py-0.5 rounded bg-white/10 text-white/40 font-bold">
+                                              {track.channels === 2 ? 'Stereo' : track.channels === 6 ? '5.1' : track.channels === 8 ? '7.1' : `${track.channels}ch`}
+                                            </span>
+                                          )}
+                                          <span className="text-[8px] px-1.5 py-0.5 rounded bg-white/10 text-white/40 font-bold uppercase">{track.codec}</span>
+                                          {track.isDefault && (
+                                            <span className="text-[7px] px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-400/60 font-bold">DEF</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                      {currentAudioTrack === track.trackIndex && <Check size={14} className="text-emerald-400 shrink-0 ml-2" />}
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+
+                              {/* Browser-detected tracks (fallback when no ffprobe data) */}
+                              {(!probeData || probeData.audio.length === 0) && audioTracks.length > 0 && (
+                                <>
                                   {audioTracks.map((track) => (
                                     <button
                                       key={track.index}
@@ -1363,38 +1736,27 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                                 </>
                               )}
 
-                              {metadataAudioTracks.length > 0 && (
-                                <>
-                                  <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider text-white/40 font-bold border-t border-white/5 mt-1">Detected Audio Languages</div>
-                                  {metadataAudioTracks.map((track) => (
-                                    <button
-                                      key={`meta-audio-${track.index}`}
-                                      onClick={async () => {
-                                        const candidates = relatedAudioVariants.filter((variant) => {
-                                          const langs = (variant.audioLanguages || []).map((l) => l.toLowerCase());
-                                          return langs.includes(track.label.toLowerCase());
-                                        });
-
-                                        const preferred = candidates
-                                          .map((variant) => ({ variant, score: scoreAudioCompatibility(variant, currentSource) }))
-                                          .sort((a, b) => b.score - a.score)[0]?.variant;
-
-                                        if (preferred && preferred.id !== currentSource?.id) {
-                                          await changeSource(preferred);
-                                        }
-
-                                        setShowAudioMenu(false);
-                                      }}
-                                      className="w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors text-zinc-300"
-                                    >
-                                      <div className="flex items-center gap-2 min-w-0">
-                                        <span className="truncate">{track.label}</span>
-                                      </div>
-                                    </button>
-                                  ))}
-                                </>
+                              {/* Restore Original Audio when transcoding */}
+                              {streamUrl && streamUrl.includes('transcode=1') && (
+                                <button
+                                  onClick={() => {
+                                      const baseUrl = streamUrl.split('?')[0];
+                                      const currentParams = new URLSearchParams(streamUrl.split('?')[1] || '');
+                                      const fileIdx = currentParams.get('fileIdx') || '0';
+                                      const newUrl = `${baseUrl}?fileIdx=${fileIdx}`;
+                                      setLastLog('Restoring original audio...');
+                                      setStreamUrl(newUrl);
+                                      setCurrentAudioTrack(0);
+                                      setShowAudioMenu(false);
+                                  }}
+                                  className="w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 hover:bg-white/5 transition-colors text-amber-400 border-t border-white/5"
+                                >
+                                  <RotateCcw size={14} />
+                                  <span>Restore Original Audio</span>
+                                </button>
                               )}
 
+                              {/* Source variants (same torrent, different audio) */}
                               {relatedAudioVariants.length > 1 && (
                                 <>
                                   <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider text-white/40 font-bold border-t border-white/5 mt-1">Source Variants</div>
@@ -1412,9 +1774,6 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                                         {variant.quality && (
                                           <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 font-bold shrink-0">{variant.quality}</span>
                                         )}
-                                        {variant.seeds != null && (
-                                          <span className="text-[9px] text-emerald-300/80 shrink-0">👤 {variant.seeds}</span>
-                                        )}
                                       </div>
                                       {currentSource?.id === variant.id && <Check size={14} className="text-emerald-400 shrink-0" />}
                                     </button>
@@ -1422,9 +1781,9 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                                 </>
                               )}
 
-                              {audioTracks.length === 0 && relatedAudioVariants.length <= 1 && metadataAudioTracks.length === 0 && (
+                              {(!probeData || probeData.audio.length === 0) && audioTracks.length === 0 && relatedAudioVariants.length <= 1 && (
                                 <div className="px-4 py-3 text-xs text-white/40">
-                                  This source does not expose switchable container audio tracks in this browser.
+                                  {probePending ? 'Analyzing audio tracks...' : 'No switchable audio tracks detected'}
                                 </div>
                               )}
                             </div>
@@ -1437,7 +1796,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                   {/* Subtitles / CC */}
                   <div className="relative">
                     <button 
-                      onClick={(e) => { e.stopPropagation(); setShowSubtitleMenu(!showSubtitleMenu); setShowSourceSelector(false); }}
+                      onClick={(e) => { e.stopPropagation(); setShowSubtitleMenu(!showSubtitleMenu); setShowSourceSelector(false); setShowAudioMenu(false); }}
                       className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${currentSubtitle !== -1 ? 'text-white bg-white/10' : 'text-white/60 hover:text-white hover:bg-white/10'}`}
                       title="Subtitles"
                     >
@@ -1451,13 +1810,15 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                           initial={{ opacity: 0, y: 8 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: 8 }}
-                          className="absolute bottom-full right-0 mb-3 w-64 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50"
+                          className="absolute bottom-full right-0 mb-3 w-72 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <div className="p-3 border-b border-white/10 bg-white/5">
                             <h4 className="text-xs font-bold text-white/90 uppercase tracking-wider">Subtitles</h4>
+                            <span className="text-[9px] text-white/30">{subtitles.length} available</span>
                           </div>
-                          <div className="max-h-[280px] overflow-y-auto py-1 scrollbar-thin scrollbar-thumb-white/10">
+                          <div className="max-h-[320px] overflow-y-auto py-1 scrollbar-thin scrollbar-thumb-white/10">
+                            {/* Off button */}
                             <button
                               onClick={() => { setCurrentSubtitle(-1); setShowSubtitleMenu(false); }}
                               className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${currentSubtitle === -1 ? 'text-white' : 'text-zinc-400'}`}
@@ -1465,73 +1826,42 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                               <span>Off</span>
                               {currentSubtitle === -1 && <Check size={14} className="text-emerald-400" />}
                             </button>
+                            
                             {subtitles.length === 0 ? (
                               <div className="px-4 py-3 text-xs text-white/30 italic text-center">Searching...</div>
                             ) : (
-                              Object.entries(subtitleGroups).map(([lang, subs]) => {
-                                const hasMultiple = subs.length > 1;
-                                const isExpanded = expandedLang === lang;
-                                // Check if any subtitle in this group is the active one
-                                const activeSubInGroup = subs.some(sub => {
-                                  const globalIdx = subtitles.findIndex(s => s.fileIdx === sub.fileIdx);
-                                  return globalIdx === currentSubtitle;
-                                });
+                              // Group by provider with section headers
+                              Object.entries(subtitleGroups).map(([provider, subs]) => {
+                                const providerColors: Record<string, string> = {
+                                  'Embedded': 'text-purple-400 bg-purple-500/10',
+                                  'Sidecar': 'text-sky-400 bg-sky-500/10',
+                                  'OpenSubtitles': 'text-emerald-400 bg-emerald-500/10',
+                                  'SubDL': 'text-amber-400 bg-amber-500/10',
+                                  'SubSource': 'text-pink-400 bg-pink-500/10',
+                                };
+                                const colorClass = providerColors[provider] || 'text-white/50 bg-white/10';
                                 
-                                if (!hasMultiple) {
-                                  // Single subtitle for this language - show directly
-                                  const sub = subs[0];
-                                  const globalIdx = subtitles.findIndex(s => s.fileIdx === sub.fileIdx);
-                                  return (
-                                    <button
-                                      key={sub.fileIdx}
-                                      onClick={() => { setCurrentSubtitle(globalIdx); setShowSubtitleMenu(false); }}
-                                      className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${currentSubtitle === globalIdx ? 'text-white' : 'text-zinc-400'}`}
-                                    >
-                                      <div className="flex items-center gap-2 min-w-0">
-                                        <span className="truncate">{lang}</span>
-                                        {sub.source && <span className="text-[8px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 font-bold shrink-0">{sub.source}</span>}
-                                      </div>
-                                      {currentSubtitle === globalIdx && <Check size={14} className="text-emerald-400 shrink-0" />}
-                                    </button>
-                                  );
-                                }
-
-                                // Multiple subtitles for this language - show expandable group
                                 return (
-                                  <div key={lang}>
-                                    <button
-                                      onClick={() => setExpandedLang(isExpanded ? null : lang)}
-                                      className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${activeSubInGroup ? 'text-white' : 'text-zinc-400'}`}
-                                    >
-                                      <div className="flex items-center gap-2">
-                                        <span>{lang}</span>
-                                        <span className="text-[9px] text-white/30 font-mono">{subs.length}</span>
-                                      </div>
-                                      <div className="flex items-center gap-1">
-                                        {activeSubInGroup && <Check size={12} className="text-emerald-400" />}
-                                        <ChevronDown size={14} className={`text-white/30 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                                      </div>
-                                    </button>
-                                    {isExpanded && (
-                                      <div className="bg-white/[0.03]">
-                                        {subs.map((sub, i) => {
-                                          const globalIdx = subtitles.findIndex(s => s.fileIdx === sub.fileIdx);
-                                          return (
-                                            <button
-                                              key={sub.fileIdx}
-                                              onClick={() => { setCurrentSubtitle(globalIdx); setShowSubtitleMenu(false); setExpandedLang(null); }}
-                                              className={`w-full text-left pl-8 pr-4 py-2 text-xs flex items-center justify-between hover:bg-white/5 transition-colors ${currentSubtitle === globalIdx ? 'text-white' : 'text-zinc-500'}`}
-                                            >
-                                              <div className="flex items-center gap-2 min-w-0">
-                                                <span className="truncate">Track {i + 1}</span>
-                                                {sub.source && <span className="text-[7px] px-1 py-0.5 rounded bg-white/10 text-white/40 font-bold shrink-0">{sub.source}</span>}
-                                              </div>
-                                              {currentSubtitle === globalIdx && <Check size={12} className="text-emerald-400 shrink-0" />}
-                                            </button>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
+                                  <div key={provider}>
+                                    <div className="px-4 pt-2.5 pb-1 flex items-center gap-2 border-t border-white/5 first:border-t-0">
+                                      <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${colorClass}`}>
+                                        {provider}
+                                      </span>
+                                      <span className="text-[9px] text-white/20">{subs.length}</span>
+                                    </div>
+                                    {subs.map((sub) => {
+                                      const globalIdx = subtitles.findIndex(s => s.fileIdx === sub.fileIdx);
+                                      return (
+                                        <button
+                                          key={sub.fileIdx}
+                                          onClick={() => { setCurrentSubtitle(globalIdx); setShowSubtitleMenu(false); }}
+                                          className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${currentSubtitle === globalIdx ? 'text-white' : 'text-zinc-400'}`}
+                                        >
+                                          <span className="truncate">{sub.label}</span>
+                                          {currentSubtitle === globalIdx && <Check size={14} className="text-emerald-400 shrink-0" />}
+                                        </button>
+                                      );
+                                    })}
                                   </div>
                                 );
                               })

@@ -1,7 +1,7 @@
-// Proxy to fetch subtitles from OpenSubtitles via Stremio Addon
-// This avoids CORs issues and allows caching/processing
+// Multi-provider subtitle proxy
+// Fetches from OpenSubtitles v3 Pro, SubSource, and SubDL in parallel
 import { NextRequest, NextResponse } from 'next/server';
-import { getOpenSubtitles } from '@/lib/subtitle-service';
+import { getMultiProviderSubtitles } from '@/lib/subtitle-service';
 
 function isArabicLang(lang?: string, label?: string): boolean {
     const l = (lang || '').toLowerCase();
@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        const subs = await getOpenSubtitles(
+        const subs = await getMultiProviderSubtitles(
             imdbId, 
             season ? parseInt(season) : undefined, 
             episode ? parseInt(episode) : undefined
@@ -46,20 +46,8 @@ export async function GET(request: NextRequest) {
 
             return 0;
         });
-
-        // Deduplicate: keep only the first (best) subtitle per language
-        // This dramatically reduces 429 errors from the proxy
-        const seen = new Map<string, typeof subs>();
-        for (const sub of subs) {
-            const key = (sub.lang || 'unknown').toLowerCase();
-            if (!seen.has(key)) seen.set(key, []);
-            seen.get(key)!.push(sub);
-        }
         
-        // Take top 2 per language to give variety without spam
-        const deduped = Array.from(seen.values()).flatMap(group => group.slice(0, 2));
-        
-        return NextResponse.json({ subtitles: deduped });
+        return NextResponse.json({ subtitles: subs });
 
     } catch (e: any) {
         return NextResponse.json({ error: e.message }, { status: 500 });
