@@ -3,7 +3,8 @@ import { NextResponse } from 'next/server';
 
 export async function GET(request: Request) {
     const searchParams = new URL(request.url).searchParams;
-    const infoHash = searchParams.get('infoHash');
+    const rawHash = searchParams.get('infoHash');
+    const infoHash = rawHash ? rawHash.trim().toLowerCase() : null;
 
     if (!infoHash) {
         return new NextResponse(JSON.stringify({ error: 'Missing infoHash' }), { status: 400 });

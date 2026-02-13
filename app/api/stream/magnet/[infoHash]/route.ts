@@ -8,7 +8,10 @@ const DEBUG_STREAM_LOGS = process.env.DEBUG_STREAM_LOGS === '1';
 
 export async function GET(request: Request, props: { params: Promise<{ infoHash: string }> }) {
     const params = await props.params;
-    const { infoHash } = params;
+    const infoHash = (params.infoHash || '').trim().toLowerCase();
+    if (!/^[a-f0-9]{40}$/.test(infoHash)) {
+        return new NextResponse('Invalid infoHash', { status: 400 });
+    }
     const searchParams = new URL(request.url).searchParams;
     const fileIdx = Number(searchParams.get('fileIdx') || 0);
     const rangeHeader = request.headers.get('range');

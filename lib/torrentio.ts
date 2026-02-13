@@ -45,6 +45,7 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
     if (!data.streams || !Array.isArray(data.streams)) return [];
 
     const parsedStreams = data.streams.map((stream, index) => {
+      const normalizedInfoHash = (stream.infoHash || '').trim().toLowerCase();
       const rawTitle = stream.title || '';
       const lines = rawTitle
         .split('\n')
@@ -115,7 +116,7 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
 
       // Construct Magnet Link (uses internal proxy)
       const fileIdx = Number.isInteger(stream.fileIdx) ? Number(stream.fileIdx) : 0;
-      const magnetUrl = `/api/stream/magnet/${stream.infoHash}?fileIdx=${fileIdx}`;
+      const magnetUrl = `/api/stream/magnet/${normalizedInfoHash}?fileIdx=${fileIdx}`;
 
       // Construct User-Facing Info String
       // "1080p • 💾 1.5 GB • 👤 120"
@@ -147,7 +148,7 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
       if (hasMultiChannelAudio && !hasAAC && !hasOpus) score -= 2200;
 
       return {
-        id: `torrentio-${stream.infoHash}-${fileIdx}-${index}`,
+        id: `torrentio-${normalizedInfoHash}-${fileIdx}-${index}`,
         name: stream.name || 'Torrentio',
         type: 'p2p' as const, 
         url: magnetUrl,
@@ -159,7 +160,7 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
         filename,
         codec: isHevc ? 'HEVC' : isH264 ? 'H.264' : undefined,
         audioCodec,
-        infoHash: stream.infoHash,
+        infoHash: normalizedInfoHash,
         _score: score
       };
     });

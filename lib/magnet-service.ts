@@ -50,15 +50,20 @@ if (!existsSync(TORRENT_STORAGE_PATH)) {
     } catch {}
 }
 
+function normalizeInfoHash(infoHash: string): string {
+    return (infoHash || '').trim().toLowerCase();
+}
+
 function markTorrentAccess(infoHash: string) {
-    globalForMagnet.torrentLastAccess.set(infoHash, Date.now());
+    globalForMagnet.torrentLastAccess.set(normalizeInfoHash(infoHash), Date.now());
 }
 
 export function recordTorrentDelivery(infoHash: string, bytes: number, durationMs: number) {
-    if (!infoHash || bytes <= 0 || durationMs <= 0) return;
+    const normalized = normalizeInfoHash(infoHash);
+    if (!normalized || bytes <= 0 || durationMs <= 0) return;
     const bytesPerSec = Math.round((bytes / durationMs) * 1000);
 
-    globalForMagnet.torrentDeliveryStats.set(infoHash, {
+    globalForMagnet.torrentDeliveryStats.set(normalized, {
         bytesPerSec,
         updatedAt: Date.now(),
         lastChunkBytes: bytes,
@@ -66,7 +71,8 @@ export function recordTorrentDelivery(infoHash: string, bytes: number, durationM
 }
 
 export function getTorrentDeliveryStats(infoHash: string) {
-    const stats = globalForMagnet.torrentDeliveryStats.get(infoHash);
+    const normalized = normalizeInfoHash(infoHash);
+    const stats = globalForMagnet.torrentDeliveryStats.get(normalized);
     if (!stats) return null;
 
     if (Date.now() - stats.updatedAt > 15000) {
@@ -77,10 +83,11 @@ export function getTorrentDeliveryStats(infoHash: string) {
 }
 
 function pruneOtherTorrents(currentInfoHash: string) {
+    const normalizedCurrent = normalizeInfoHash(currentInfoHash);
     const client = globalForMagnet.magnetClient;
     if (!client) return;
 
-    const others = client.torrents.filter((t) => t.infoHash !== currentInfoHash);
+    const others = client.torrents.filter((t) => normalizeInfoHash(t.infoHash) !== normalizedCurrent);
     if (others.length <= Math.max(0, MAX_ACTIVE_TORRENTS - 1)) return;
 
     const sortedByOldest = [...others].sort((a, b) => {
@@ -98,13 +105,14 @@ function pruneOtherTorrents(currentInfoHash: string) {
 }
 
 function resetIdleTimer(infoHash: string) {
+    const normalized = normalizeInfoHash(infoHash);
     markTorrentAccess(infoHash);
     const timers = globalForMagnet.torrentTimers;
-    if (timers.has(infoHash)) clearTimeout(timers.get(infoHash)!);
-    timers.set(infoHash, setTimeout(() => {
+    if (timers.has(normalized)) clearTimeout(timers.get(normalized)!);
+    timers.set(normalized, setTimeout(() => {
         const client = globalForMagnet.magnetClient;
         if (!client) return;
-        const torrent = client.get(infoHash);
+        const torrent = client.get(normalized);
         // FIX: Check if torrent is a Promise (can happen in async contexts)
         if (torrent && typeof (torrent as any).then !== 'function') {
             if (DEBUG_TORRENT_LOGS) {
@@ -116,9 +124,9 @@ function resetIdleTimer(infoHash: string) {
                 console.error(`[MagnetService] Error destroying torrent: ${err}`);
             }
         }
-        timers.delete(infoHash);
-        globalForMagnet.torrentLastAccess.delete(infoHash);
-        globalForMagnet.torrentDeliveryStats.delete(infoHash);
+        timers.delete(normalized);
+        globalForMagnet.torrentLastAccess.delete(normalized);
+        globalForMagnet.torrentDeliveryStats.delete(normalized);
     }, TORRENT_IDLE_MS));
 }
 
@@ -145,8 +153,9 @@ export const getMagnetClient = () => {
 };
 
 export async function getTorrentByInfoHash(infoHash: string): Promise<WebTorrent.Torrent | null> {
+    const normalized = normalizeInfoHash(infoHash);
     const client = getMagnetClient();
-    let torrent: any = client.get(infoHash);
+    let torrent: any = client.get(normalized);
 
     if (torrent && typeof (torrent as any).then === 'function') {
         torrent = await (torrent as any);
@@ -157,7 +166,8 @@ export async function getTorrentByInfoHash(infoHash: string): Promise<WebTorrent
 }
 
 export async function prioritizeTorrentRange(infoHash: string, startByte: number, endByte: number) {
-    const torrent = await getTorrentByInfoHash(infoHash);
+    const normalized = normalizeInfoHash(infoHash);
+    const torrent = await getTorrentByInfoHash(normalized);
     if (!torrent || !torrent.pieceLength) return;
 
     const startPiece = Math.max(0, Math.floor(startByte / torrent.pieceLength));
@@ -172,13 +182,14 @@ export async function prioritizeTorrentRange(infoHash: string, startByte: number
         // Ignore unsupported critical-range errors on older clients
     }
 
-    resetIdleTimer(infoHash);
+    resetIdleTimer(normalized);
 }
 
 export function destroyTorrent(infoHash: string) {
+    const normalized = normalizeInfoHash(infoHash);
     const client = globalForMagnet.magnetClient;
     if (!client) return;
-    const torrent = client.get(infoHash);
+    const torrent = client.get(normalized);
     // FIX: Check if torrent is a Promise before calling destroy
     if (torrent && typeof (torrent as any).then !== 'function') {
         if (DEBUG_TORRENT_LOGS) {
@@ -195,12 +206,12 @@ export function destroyTorrent(infoHash: string) {
         }
     }
     const timers = globalForMagnet.torrentTimers;
-    if (timers.has(infoHash)) {
-        clearTimeout(timers.get(infoHash)!);
-        timers.delete(infoHash);
+    if (timers.has(normalized)) {
+        clearTimeout(timers.get(normalized)!);
+        timers.delete(normalized);
     }
-    globalForMagnet.torrentLastAccess.delete(infoHash);
-    globalForMagnet.torrentDeliveryStats.delete(infoHash);
+    globalForMagnet.torrentLastAccess.delete(normalized);
+    globalForMagnet.torrentDeliveryStats.delete(normalized);
 }
 
 export function destroyAllTorrents() {
@@ -223,12 +234,13 @@ export function destroyAllTorrents() {
 }
 
 export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): Promise<WebTorrent.TorrentFile | null> => {
+    const normalized = normalizeInfoHash(infoHash);
     const client = getMagnetClient();
     const trParams = DEFAULT_TRACKERS.map(t => `&tr=${encodeURIComponent(t)}`).join('');
-    const magnetURI = `magnet:?xt=urn:btih:${infoHash}${trParams}`;
+    const magnetURI = `magnet:?xt=urn:btih:${normalized}${trParams}`;
 
     // Check if already added
-    let torrent: any = client.get(infoHash);
+    let torrent: any = client.get(normalized);
 
     // FIX: client.get might return a Promise in some environments (e.g. Next.js server)
     if (torrent && typeof (torrent as any).then === 'function') {
@@ -237,12 +249,13 @@ export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): 
     
     if (!torrent) {
         if (DEBUG_TORRENT_LOGS) {
-            console.log(`[MagnetService] Adding torrent: ${infoHash}`);
+            console.log(`[MagnetService] Adding torrent: ${normalized}`);
         }
-        pruneOtherTorrents(infoHash);
+        pruneOtherTorrents(normalized);
         torrent = client.add(magnetURI, { 
             destroyStoreOnDestroy: true, // Don't fill disk space permanently
-            path: TORRENT_STORAGE_PATH // RAM-backed when /dev/shm is available
+            path: TORRENT_STORAGE_PATH, // RAM-backed when /dev/shm is available
+            announce: DEFAULT_TRACKERS,
         });
     }
 
@@ -287,7 +300,8 @@ export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): 
                 try { torrent.destroy({ destroyStore: true } as any); } catch(e) {}
                 torrent = client.add(magnetURI, { 
                     destroyStoreOnDestroy: true,
-                    path: TORRENT_STORAGE_PATH
+                    path: TORRENT_STORAGE_PATH,
+                    announce: DEFAULT_TRACKERS,
                 });
             }
         }
@@ -329,7 +343,7 @@ export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): 
     }
     
     // Reset idle timer every time a file is requested
-    resetIdleTimer(infoHash);
+    resetIdleTimer(normalized);
     
     // Critical: Prioritize the beginning of the file to allow instant playback
     const startByte = 0;
