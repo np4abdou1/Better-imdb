@@ -767,6 +767,33 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
       return (currentSource?.type === 'p2p') || (streamUrl && streamUrl.startsWith('magnet:'));
   }, [currentSource, streamUrl]);
 
+  const relatedAudioVariants = useMemo(() => {
+    if (!currentSource || !sources.length) return [] as StreamSource[];
+
+    const currentHash = currentSource.infoHash;
+    const p2pSources = sources.filter((s) => s.type === 'p2p');
+    if (!p2pSources.length) return [] as StreamSource[];
+
+    const baseSet = currentHash
+      ? p2pSources.filter((s) => s.infoHash === currentHash)
+      : p2pSources.filter((s) => s.quality === currentSource.quality);
+
+    const uniq = new Map<string, StreamSource>();
+    for (const variant of baseSet) {
+      uniq.set(variant.id, variant);
+    }
+
+    return Array.from(uniq.values());
+  }, [currentSource, sources]);
+
+  const showAudioControl = useMemo(() => {
+    if (!isP2P) return false;
+    if (audioTracks.length > 1) return true;
+    if (relatedAudioVariants.length > 1) return true;
+    const info = `${currentSource?.filename || ''} ${currentSource?.info || ''}`.toLowerCase();
+    return /dual[-\s]?audio|multi[-\s]?audio|multiple\s+audio/.test(info);
+  }, [isP2P, audioTracks.length, relatedAudioVariants.length, currentSource]);
+
   const torrentInfoLine = useMemo(() => {
     if (serverTorrentStats) {
       return `Peers ${serverTorrentStats.numPeers} • Server ${formatSpeed(serverTorrentStats.downloadSpeed)} • Client ${formatSpeed(serverTorrentStats.deliveredSpeed || 0)} • ${(serverTorrentStats.progress * 100).toFixed(0)}%`;
@@ -1183,7 +1210,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                 {/* Right */}
                 <div className="flex items-center gap-4">
 
-                  {audioTracks.length > 1 && (
+                  {showAudioControl && (
                     <div className="relative">
                       <button
                         onClick={(e) => {
@@ -1212,21 +1239,59 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                               <h4 className="text-xs font-bold text-white/90 uppercase tracking-wider">Audio Tracks</h4>
                             </div>
                             <div className="max-h-[240px] overflow-y-auto py-1 scrollbar-thin scrollbar-thumb-white/10">
-                              {audioTracks.map((track) => (
-                                <button
-                                  key={track.index}
-                                  onClick={() => selectAudioTrack(track.index)}
-                                  className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${currentAudioTrack === track.index ? 'text-white' : 'text-zinc-400'}`}
-                                >
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <span className="truncate">{track.label}</span>
-                                    {track.language && (
-                                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 font-bold uppercase shrink-0">{track.language}</span>
-                                    )}
-                                  </div>
-                                  {currentAudioTrack === track.index && <Check size={14} className="text-emerald-400 shrink-0" />}
-                                </button>
-                              ))}
+                              {audioTracks.length > 1 && (
+                                <>
+                                  <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider text-white/40 font-bold">Container Tracks</div>
+                                  {audioTracks.map((track) => (
+                                    <button
+                                      key={track.index}
+                                      onClick={() => selectAudioTrack(track.index)}
+                                      className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${currentAudioTrack === track.index ? 'text-white' : 'text-zinc-400'}`}
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <span className="truncate">{track.label}</span>
+                                        {track.language && (
+                                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 font-bold uppercase shrink-0">{track.language}</span>
+                                        )}
+                                      </div>
+                                      {currentAudioTrack === track.index && <Check size={14} className="text-emerald-400 shrink-0" />}
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+
+                              {relatedAudioVariants.length > 1 && (
+                                <>
+                                  <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider text-white/40 font-bold border-t border-white/5 mt-1">Source Variants</div>
+                                  {relatedAudioVariants.map((variant) => (
+                                    <button
+                                      key={variant.id}
+                                      onClick={async () => {
+                                        await changeSource(variant);
+                                        setShowAudioMenu(false);
+                                      }}
+                                      className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${currentSource?.id === variant.id ? 'text-white' : 'text-zinc-400'}`}
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <span className="truncate">{variant.audioCodec || 'Auto'}</span>
+                                        {variant.quality && (
+                                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 font-bold shrink-0">{variant.quality}</span>
+                                        )}
+                                        {variant.seeds != null && (
+                                          <span className="text-[9px] text-emerald-300/80 shrink-0">👤 {variant.seeds}</span>
+                                        )}
+                                      </div>
+                                      {currentSource?.id === variant.id && <Check size={14} className="text-emerald-400 shrink-0" />}
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+
+                              {audioTracks.length <= 1 && relatedAudioVariants.length <= 1 && (
+                                <div className="px-4 py-3 text-xs text-white/40">
+                                  This source does not expose switchable container audio tracks in this browser.
+                                </div>
+                              )}
                             </div>
                           </motion.div>
                         )}
