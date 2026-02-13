@@ -62,7 +62,7 @@ export interface StreamSource {
 // --- HELPERS ---
 
 const formatTime = (seconds) => {
-  if (!seconds || isNaN(seconds)) return '0:00';
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0:00';
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
@@ -307,8 +307,16 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const volumeTimeoutRef = useRef(null);
   const autoFallbackTriedRef = useRef<Set<string>>(new Set());
   const audioCompatSwitchTriedRef = useRef<Set<string>>(new Set());
+  const probeAutoTriedRef = useRef<Set<string>>(new Set());
+  const autoTranscodeTriedRef = useRef<Set<string>>(new Set());
 
   const lastSyncTimeRef = useRef(0);
+
+  const safeDuration = useMemo(() => {
+    if (Number.isFinite(duration) && duration > 0) return duration;
+    if (probeData?.duration && Number.isFinite(probeData.duration)) return probeData.duration;
+    return 0;
+  }, [duration, probeData?.duration]);
 
   const syncAudioTracks = useCallback(() => {
     // Prevent syncing if we just manually switched tracks (gives browser time to update)
@@ -579,6 +587,28 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     }
   };
 
+  // If a P2P stream starts playing directly, ensure we probe tracks.
+  useEffect(() => {
+    if (!streamUrl || !streamUrl.includes('/api/stream/magnet/')) return;
+    const infoHash = getInfoHashFromStreamUrl(streamUrl);
+    if (!infoHash) return;
+
+    const fileIdx = streamUrl.match(/fileIdx=(\d+)/)?.[1] || '0';
+    const key = `${infoHash}:${fileIdx}`;
+
+    if (probeAutoTriedRef.current.has(key)) return;
+    if (probePending) return;
+
+    const sameFile = probeData?.filename && currentSource?.filename
+      ? probeData.filename === currentSource.filename
+      : false;
+
+    if (sameFile) return;
+
+    probeAutoTriedRef.current.add(key);
+    fetchProbeData(infoHash, fileIdx);
+  }, [streamUrl, currentSource?.filename, probeData, fetchProbeData, probePending]);
+
   const isLikelyIncompatibleSource = useCallback((source?: StreamSource | null) => {
     if (!source) return false;
     const codec = (source.codec || '').toLowerCase();
@@ -677,10 +707,14 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
   useEffect(() => {
     autoFallbackTriedRef.current.clear();
+    audioCompatSwitchTriedRef.current.clear();
+    probeAutoTriedRef.current.clear();
+    autoTranscodeTriedRef.current.clear();
   }, [id, season, episode]);
 
   useEffect(() => {
-    const currentIsP2P = currentSource?.type === 'p2p' || !!(streamUrl && streamUrl.startsWith('magnet:'));
+    const currentIsP2P = currentSource?.type === 'p2p'
+      || !!(streamUrl && (streamUrl.startsWith('magnet:') || streamUrl.includes('/api/stream/magnet/')));
     if (!currentIsP2P || !currentSource) return;
 
     const sourceId = currentSource.id;
@@ -695,6 +729,33 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     setLastLog(`Switching to compatible audio source (${compatible.audioCodec || 'AAC'})...`);
     changeSource(compatible).catch(() => {});
   }, [currentSource, streamUrl, isRiskyAudioCodec, pickBestCompatibleAudioSource]);
+
+  // Auto-transcode risky audio on P2P playback to avoid silent tracks.
+  useEffect(() => {
+    if (!streamUrl || !streamUrl.includes('/api/stream/magnet/')) return;
+    if (streamUrl.includes('transcode=1')) return;
+
+    const infoHash = getInfoHashFromStreamUrl(streamUrl);
+    if (!infoHash) return;
+
+    const fileIdx = streamUrl.match(/fileIdx=(\d+)/)?.[1] || '0';
+    const key = `${infoHash}:${fileIdx}`;
+    if (autoTranscodeTriedRef.current.has(key)) return;
+
+    const riskySource = isRiskyAudioCodec(currentSource?.audioCodec);
+    const riskyTrack = (probeData?.audio || []).some((t) => isRiskyAudioCodec(t.codec));
+    if (!riskySource && !riskyTrack) return;
+
+    const preferredTrack = probeData?.audio.find((t) => t.isDefault) || probeData?.audio[0];
+    const audioIdx = preferredTrack?.trackIndex ?? 0;
+    const baseUrl = streamUrl.split('?')[0];
+    const newUrl = `${baseUrl}?fileIdx=${fileIdx}&transcode=1&audioIdx=${audioIdx}`;
+
+    autoTranscodeTriedRef.current.add(key);
+    setLastLog('Transcoding audio for compatibility...');
+    setStreamUrl(newUrl);
+    setCurrentAudioTrack(audioIdx);
+  }, [streamUrl, currentSource?.audioCodec, probeData, isRiskyAudioCodec]);
 
   useEffect(() => {
     setAudioTracks([]);
@@ -914,10 +975,11 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const seekRelative = useCallback((seconds) => {
     const video = videoRef.current;
     if (!video) return;
-    video.currentTime = Math.min(Math.max(video.currentTime + seconds, 0), duration);
+    if (!safeDuration) return;
+    video.currentTime = Math.min(Math.max(video.currentTime + seconds, 0), safeDuration);
     setCurrentTime(video.currentTime);
     handleMouseMove();
-  }, [duration, handleMouseMove]);
+  }, [safeDuration, handleMouseMove]);
 
   const toggleFullscreen = useCallback(async () => {
     if (!containerRef.current) return;
@@ -959,23 +1021,23 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
   const handleSeekClick = useCallback((e) => {
     e.stopPropagation();
-    if (!timelineRef.current || !duration) return;
+    if (!timelineRef.current || !safeDuration) return;
     const rect = timelineRef.current.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const seekTo = pct * duration;
+    const seekTo = pct * safeDuration;
     if (videoRef.current) videoRef.current.currentTime = seekTo;
     setCurrentTime(seekTo);
-  }, [duration]);
+  }, [safeDuration]);
 
   const handleTimelineHover = useCallback((e) => {
-    if (!timelineRef.current || !duration) return;
+    if (!timelineRef.current || !safeDuration) return;
     const rect = timelineRef.current.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const time = pct * duration;
+    const time = pct * safeDuration;
 
     setHoverTime(time);
     setHoverPos(pct * 100);
-  }, [duration]);
+  }, [safeDuration]);
 
   const handleTimelineLeave = useCallback(() => {
     setHoverTime(null);
@@ -1046,7 +1108,8 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
   // Check if current stream is P2P
   const isP2P = useMemo(() => {
-      return (currentSource?.type === 'p2p') || (streamUrl && streamUrl.startsWith('magnet:'));
+      return (currentSource?.type === 'p2p')
+        || (streamUrl && (streamUrl.startsWith('magnet:') || streamUrl.includes('/api/stream/magnet/')));
   }, [currentSource, streamUrl]);
 
   const relatedAudioVariants = useMemo(() => {
@@ -1217,10 +1280,11 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     );
   }
 
-  const progressPct = duration ? (currentTime / duration) * 100 : 0;
-  const bufferedPct = duration && videoRef.current?.buffered.length 
-    ? (videoRef.current.buffered.end(videoRef.current.buffered.length - 1) / duration) * 100 
+  const progressPct = safeDuration ? (currentTime / safeDuration) * 100 : 0;
+  const bufferedPct = safeDuration && videoRef.current?.buffered.length 
+    ? (videoRef.current.buffered.end(videoRef.current.buffered.length - 1) / safeDuration) * 100 
     : 0;
+  const timelineDisabled = !safeDuration;
 
   return (
     <div 
@@ -1257,6 +1321,12 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
             const v = videoRef.current;
             setCurrentTime(v?.currentTime || 0);
 
+            if (v?.duration && Number.isFinite(v.duration) && v.duration > 0) {
+              if (!Number.isFinite(duration) || Math.abs(v.duration - duration) > 0.5) {
+                setDuration(v.duration);
+              }
+            }
+
             if (!v) return;
             if ((v.currentTime || 0) > 2 && (v.videoWidth || 0) === 0) {
               attemptAutoFallback('black-screen');
@@ -1264,7 +1334,10 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
           }}
           onLoadedMetadata={() => {
             const video = videoRef.current;
-            setDuration(video?.duration || 0);
+            const nextDuration = video?.duration || 0;
+            if (Number.isFinite(nextDuration) && nextDuration > 0) {
+              setDuration(nextDuration);
+            }
             if (!video) return;
 
             video.muted = muted;
@@ -1283,6 +1356,13 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
             }, 1200);
 
             syncAudioTracks();
+          }}
+          onDurationChange={() => {
+            const v = videoRef.current;
+            if (!v) return;
+            if (Number.isFinite(v.duration) && v.duration > 0) {
+              setDuration(v.duration);
+            }
           }}
           onWaiting={() => setWaiting(true)}
           onPlaying={() => {
@@ -1559,7 +1639,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
               {/* Timeline */}
               <div 
                 ref={timelineRef}
-                className="relative w-full h-[18px] cursor-pointer group/tl flex items-center rounded-full bg-white/5 backdrop-blur-sm"
+                className={`relative w-full h-[18px] ${timelineDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} group/tl flex items-center rounded-full bg-white/5 backdrop-blur-sm`}
                 onClick={handleSeekClick}
                 onMouseMove={handleTimelineHover}
                 onMouseLeave={handleTimelineLeave}
@@ -1604,7 +1684,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                     )}
                    <span className="text-white/80 text-[13px] font-medium truncate">{titleLine}</span>
                 </div>
-                <span className="text-white/40 text-xs tabular-nums shrink-0 ml-2">{formatTime(currentTime)} / {formatTime(duration)}</span>
+                <span className="text-white/40 text-xs tabular-nums shrink-0 ml-2">{formatTime(currentTime)} / {formatTime(safeDuration)}</span>
               </div>
 
               {/* Controls Row */}

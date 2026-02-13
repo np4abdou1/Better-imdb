@@ -81,16 +81,42 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
 
             const fileStream = file.createReadStream() as Readable;
             fileStream.pipe(ffmpegProc.stdin).on('error', () => {}); // Handle pipe errors aggressively
+            ffmpegProc.stdin.on('error', () => {}); // Ignore EPIPE when client closes early
 
             const readable = new ReadableStream({
                 start(controller) {
-                    ffmpegProc.stdout.on('data', chunk => controller.enqueue(chunk));
-                    ffmpegProc.stdout.on('end', () => controller.close());
-                    ffmpegProc.on('error', err => controller.error(err));
-                    
-                    // Kill ffmpeg if client disconnects heavily (handled by cancel, but good to double check)
-                    ffmpegProc.on('close', () => {
+                    let closed = false;
+
+                    const safeClose = () => {
+                        if (closed) return;
+                        closed = true;
                         try { controller.close(); } catch {}
+                    };
+
+                    const safeError = (err: Error) => {
+                        if (closed) return;
+                        closed = true;
+                        try { controller.error(err); } catch {}
+                    };
+
+                    const abortHandler = () => {
+                        console.log('[StreamAPI] Transcoding aborted by client');
+                        ffmpegProc.kill('SIGKILL');
+                        fileStream.destroy();
+                        safeClose();
+                    };
+
+                    request.signal.addEventListener('abort', abortHandler, { once: true });
+
+                    ffmpegProc.stdout.on('data', chunk => {
+                        if (closed) return;
+                        try { controller.enqueue(chunk); } catch {}
+                    });
+                    ffmpegProc.stdout.on('end', () => safeClose());
+                    ffmpegProc.on('error', err => safeError(err));
+                    ffmpegProc.on('close', () => {
+                        request.signal.removeEventListener('abort', abortHandler);
+                        safeClose();
                     });
                 },
                 cancel() {

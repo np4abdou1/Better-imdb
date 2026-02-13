@@ -86,23 +86,45 @@ async function probeFile(infoHash: string, fileIdx: number): Promise<TracksRespo
   const file = await getFileFromMagnet(infoHash, fileIdx, 'video');
   if (!file) throw new Error('File not found');
 
+  const baseResult: TracksResponse = {
+    audio: [],
+    subtitle: [],
+    video: null,
+    filename: file.name,
+    fileSize: file.length,
+  };
+
   return new Promise((resolve, reject) => {
-    // Use ffprobe on piped input - read first 20MB which is enough for container headers
-    const PROBE_BYTES = 20 * 1024 * 1024;
+    // Use ffprobe on piped input - read a limited chunk to avoid long waits
+    const PROBE_BYTES = 8 * 1024 * 1024;
     
     const ffprobe = spawn('ffprobe', [
       '-v', 'quiet',
       '-print_format', 'json',
       '-show_format',
       '-show_streams',
-      '-probesize', '20000000',    // 20MB probe size
-      '-analyzeduration', '10000000', // 10s analysis
+      '-probesize', '8000000',       // 8MB probe size
+      '-analyzeduration', '5000000', // 5s analysis
       'pipe:0'
     ], { stdio: ['pipe', 'pipe', 'pipe'] });
 
     let stdout = '';
     let stderr = '';
     let pipeFinished = false;
+    let settled = false;
+    let didTimeout = false;
+
+    const safeResolve = (result: TracksResponse) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    const safeReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
     
     ffprobe.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
     ffprobe.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -112,6 +134,9 @@ async function probeFile(infoHash: string, fileIdx: number): Promise<TracksRespo
     
     stream.pipe(ffprobe.stdin).on('error', () => {
       // Ignore EPIPE (ffprobe got enough data and closed)
+    });
+    ffprobe.stdin.on('error', () => {
+      // Ignore EPIPE/closed stdin errors
     });
 
     // Safety: if ffprobe already exited, destroy stream
@@ -124,16 +149,22 @@ async function probeFile(infoHash: string, fileIdx: number): Promise<TracksRespo
 
     // Timeout after 30s
     const timeout = setTimeout(() => {
+      didTimeout = true;
       ffprobe.kill('SIGKILL');
       stream.destroy();
-      reject(new Error('ffprobe timeout'));
-    }, 30000);
+      safeResolve(baseResult);
+    }, 20000);
 
     ffprobe.on('close', (code) => {
+      if (settled) return;
       clearTimeout(timeout);
       
       if (!stdout.trim()) {
-        reject(new Error(`ffprobe returned no output (code ${code})`));
+        if (didTimeout) {
+          safeResolve(baseResult);
+          return;
+        }
+        safeReject(new Error(`ffprobe returned no output (code ${code})`));
         return;
       }
 
@@ -229,17 +260,16 @@ async function probeFile(infoHash: string, fileIdx: number): Promise<TracksRespo
         }
 
         const result: TracksResponse = {
+          ...baseResult,
           audio,
           subtitle,
           video,
-          filename: file.name,
-          fileSize: file.length,
           duration: format.duration ? parseFloat(format.duration) : undefined,
         };
 
-        resolve(result);
+        safeResolve(result);
       } catch (e: any) {
-        reject(new Error(`ffprobe parse error: ${e.message}`));
+        safeReject(new Error(`ffprobe parse error: ${e.message}`));
       }
     });
   });
