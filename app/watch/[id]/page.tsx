@@ -244,7 +244,12 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const autoFallbackTriedRef = useRef<Set<string>>(new Set());
   const audioCompatSwitchTriedRef = useRef<Set<string>>(new Set());
 
+  const lastSyncTimeRef = useRef(0);
+
   const syncAudioTracks = useCallback(() => {
+    // Prevent syncing if we just manually switched tracks (gives browser time to update)
+    if (Date.now() - lastSyncTimeRef.current < 2000) return;
+
     const videoAny = videoRef.current as any;
     const tracks = videoAny?.audioTracks;
 
@@ -261,6 +266,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
           break;
         }
       }
+      // If none enabled, try to enable the first one (often fixes mute on start)
       if (!hasEnabled && tracks[0]) {
         tracks[0].enabled = true;
       }
@@ -287,11 +293,25 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     const tracks = videoAny?.audioTracks;
     if (!tracks || typeof tracks.length !== 'number') return;
 
+    // Direct manipulation - first disable all, then enable target
+    // This sequence is often more reliable than just setting .enabled = i===index
     for (let i = 0; i < tracks.length; i++) {
-      tracks[i].enabled = i === index;
+       if (i !== index) tracks[i].enabled = false;
     }
+    if (tracks[index]) tracks[index].enabled = true;
+
+    // Update local state immediately
     setCurrentAudioTrack(index);
-    syncAudioTracks();
+    
+    // Suspend sync for a moment to prevent overwriting local state with old browser state
+    lastSyncTimeRef.current = Date.now();
+    
+    // Force a re-read of tracks into local state slightly later
+    setTimeout(() => {
+       lastSyncTimeRef.current = 0;
+       syncAudioTracks();
+    }, 2100);
+
     setShowAudioMenu(false);
   }, [syncAudioTracks]);
 
@@ -418,7 +438,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
     const hasHevc = codec.includes('hevc') || file.includes('x265') || file.includes('h265') || info.includes('hevc');
     const hasAv1 = file.includes('av1') || info.includes('av1') || codec.includes('av1');
-    const riskyAudio = audio.includes('eac3') || audio.includes('dts') || audio.includes('truehd');
+    const riskyAudio = audio.includes('eac3') || audio.includes('dts') || audio.includes('truehd') || audio === 'multi';
 
     return hasHevc || hasAv1 || riskyAudio;
   }, []);
@@ -426,7 +446,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const isRiskyAudioCodec = useCallback((codec?: string) => {
     if (!codec) return false;
     const value = codec.toLowerCase();
-    return value.includes('eac3') || value.includes('dts') || value.includes('truehd') || value.includes('ddp');
+    return value.includes('eac3') || value.includes('dts') || value.includes('truehd') || value.includes('ddp') || value === 'multi';
   }, []);
 
   const scoreAudioCompatibility = useCallback((source: StreamSource, baseline?: StreamSource | null) => {

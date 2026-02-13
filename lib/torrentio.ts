@@ -153,6 +153,12 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
       else if (hasAC3) audioCodec = 'AC3';
       else if (hasDTS) audioCodec = 'DTS';
       else if (hasTrueHD) audioCodec = 'TrueHD';
+      
+      // If no specific codec found but it is Dual Audio, it's likely a high-quality rip (often AC3/EAC3 + AAC)
+      // We mark it so the client knows it might be complex
+      if (!audioCodec && (hasDualOrMultiAudio || audioLanguages.length > 1)) {
+        audioCodec = 'Multi'; 
+      }
 
       // Construct Magnet Link (uses internal proxy)
       const fileIdx = Number.isInteger(stream.fileIdx) ? Number(stream.fileIdx) : 0;
@@ -189,7 +195,16 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
       if (hasEAC3 || hasDTS || hasTrueHD) score -= 7000; // Common "video plays but no audio" sources
       if (hasAC3) score -= 1500;
       if (hasMultiChannelAudio && !hasAAC && !hasOpus) score -= 2200;
-      if (hasDualOrMultiAudio) score += 900; // Keep quality multi-audio releases competitive
+      
+      // Dual Audio Logic:
+      // If it explicitly has AAC, it's great (score boost).
+      // If it has NO explicit codec info, it's likely AC3/EAC3 (risky). 
+      // We limit the Dual Audio boost if we aren't sure it's safe.
+      if (hasDualOrMultiAudio) {
+         if (hasAAC || hasOpus) score += 1500; // Safe dual audio
+         else score += 200; // Unknown dual audio (risky but valuable)
+      }
+
       if (hasMultiSubsPack) score += 250;
       if (isTenBit) score -= 1800;
       if (hasDolbyVision) score -= 1800;
