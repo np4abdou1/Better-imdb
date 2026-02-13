@@ -1,20 +1,77 @@
 import WebTorrent from 'webtorrent';
+import { existsSync, mkdirSync } from 'fs';
 
 // Global singleton to persist client across requests/reloads
 // Note: WebTorrent client is heavy (DHT, ports). We want only one.
 const globalForMagnet = global as unknown as { 
     magnetClient: WebTorrent.Instance;
     torrentTimers: Map<string, NodeJS.Timeout>;
+    torrentLastAccess: Map<string, number>;
 };
 
 // Idle timeout: destroy torrents that haven't been accessed in 2 minutes
-const TORRENT_IDLE_MS = 2 * 60 * 1000;
+const TORRENT_IDLE_MS = Number(process.env.TORRENT_IDLE_MS || 45_000);
+const MAX_ACTIVE_TORRENTS = Number(process.env.MAX_ACTIVE_TORRENTS || 1);
+const DEBUG_TORRENT_LOGS = process.env.DEBUG_TORRENT_LOGS === '1';
+const TORRENT_STORAGE_PATH =
+    process.env.TORRENT_STORAGE_PATH || (existsSync('/dev/shm') ? '/dev/shm/webtorrent' : '/tmp/webtorrent');
+const DEFAULT_TRACKERS = [
+    'udp://tracker.opentrackr.org:1337/announce',
+    'udp://tracker.openbittorrent.com:80/announce',
+    'udp://opentracker.i2p.rocks:6969/announce',
+    'udp://tracker.torrent.eu.org:451/announce',
+    'udp://open.demonii.com:1337/announce',
+    'udp://tracker.internetwarriors.net:1337/announce',
+    'udp://tracker.leechers-paradise.org:6969/announce',
+    'udp://tracker.coppersurfer.tk:6969/announce',
+    'udp://tracker.moeking.me:6969/announce',
+    'udp://tracker.tiny-vps.com:6969/announce',
+    'wss://tracker.openwebtorrent.com',
+    'wss://tracker.btorrent.xyz',
+    'wss://tracker.files.fm:7073/announce'
+];
 
 if (!globalForMagnet.torrentTimers) {
     globalForMagnet.torrentTimers = new Map();
 }
 
+if (!globalForMagnet.torrentLastAccess) {
+    globalForMagnet.torrentLastAccess = new Map();
+}
+
+if (!existsSync(TORRENT_STORAGE_PATH)) {
+    try {
+        mkdirSync(TORRENT_STORAGE_PATH, { recursive: true });
+    } catch {}
+}
+
+function markTorrentAccess(infoHash: string) {
+    globalForMagnet.torrentLastAccess.set(infoHash, Date.now());
+}
+
+function pruneOtherTorrents(currentInfoHash: string) {
+    const client = globalForMagnet.magnetClient;
+    if (!client) return;
+
+    const others = client.torrents.filter((t) => t.infoHash !== currentInfoHash);
+    if (others.length <= Math.max(0, MAX_ACTIVE_TORRENTS - 1)) return;
+
+    const sortedByOldest = [...others].sort((a, b) => {
+        const ta = globalForMagnet.torrentLastAccess.get(a.infoHash) || 0;
+        const tb = globalForMagnet.torrentLastAccess.get(b.infoHash) || 0;
+        return ta - tb;
+    });
+
+    const toDestroy = sortedByOldest.slice(0, others.length - (MAX_ACTIVE_TORRENTS - 1));
+    toDestroy.forEach((torrent) => {
+        try {
+            destroyTorrent(torrent.infoHash);
+        } catch {}
+    });
+}
+
 function resetIdleTimer(infoHash: string) {
+    markTorrentAccess(infoHash);
     const timers = globalForMagnet.torrentTimers;
     if (timers.has(infoHash)) clearTimeout(timers.get(infoHash)!);
     timers.set(infoHash, setTimeout(() => {
@@ -23,7 +80,9 @@ function resetIdleTimer(infoHash: string) {
         const torrent = client.get(infoHash);
         // FIX: Check if torrent is a Promise (can happen in async contexts)
         if (torrent && typeof (torrent as any).then !== 'function') {
-            console.log(`[MagnetService] Idle timeout, destroying: ${infoHash.substring(0, 8)}...`);
+            if (DEBUG_TORRENT_LOGS) {
+                console.log(`[MagnetService] Idle timeout, destroying: ${infoHash.substring(0, 8)}...`);
+            }
             try {
                 (torrent as unknown as WebTorrent.Torrent).destroy();
             } catch (err) {
@@ -31,12 +90,15 @@ function resetIdleTimer(infoHash: string) {
             }
         }
         timers.delete(infoHash);
+        globalForMagnet.torrentLastAccess.delete(infoHash);
     }, TORRENT_IDLE_MS));
 }
 
 export const getMagnetClient = () => {
   if (!globalForMagnet.magnetClient) {
-    console.log('[MagnetService] Initializing WebTorrent client...');
+        if (DEBUG_TORRENT_LOGS) {
+                console.log('[MagnetService] Initializing WebTorrent client...');
+        }
     globalForMagnet.magnetClient = new WebTorrent({
         // Increased connections for faster peer discovery
         maxConns: 500,
@@ -54,15 +116,52 @@ export const getMagnetClient = () => {
   return globalForMagnet.magnetClient;
 };
 
+export async function getTorrentByInfoHash(infoHash: string): Promise<WebTorrent.Torrent | null> {
+    const client = getMagnetClient();
+    let torrent: any = client.get(infoHash);
+
+    if (torrent && typeof (torrent as any).then === 'function') {
+        torrent = await (torrent as any);
+    }
+
+    if (!torrent) return null;
+    return torrent as WebTorrent.Torrent;
+}
+
+export async function prioritizeTorrentRange(infoHash: string, startByte: number, endByte: number) {
+    const torrent = await getTorrentByInfoHash(infoHash);
+    if (!torrent || !torrent.pieceLength) return;
+
+    const startPiece = Math.max(0, Math.floor(startByte / torrent.pieceLength));
+    const endPiece = Math.max(startPiece, Math.floor(endByte / torrent.pieceLength));
+
+    try {
+        const torrentAny = torrent as any;
+        if (typeof torrentAny.critical === 'function') {
+            torrentAny.critical(startPiece, endPiece);
+        }
+    } catch (err) {
+        // Ignore unsupported critical-range errors on older clients
+    }
+
+    resetIdleTimer(infoHash);
+}
+
 export function destroyTorrent(infoHash: string) {
     const client = globalForMagnet.magnetClient;
     if (!client) return;
     const torrent = client.get(infoHash);
     // FIX: Check if torrent is a Promise before calling destroy
     if (torrent && typeof (torrent as any).then !== 'function') {
-        console.log(`[MagnetService] Destroying torrent: ${infoHash.substring(0, 8)}...`);
+        if (DEBUG_TORRENT_LOGS) {
+            console.log(`[MagnetService] Destroying torrent: ${infoHash.substring(0, 8)}...`);
+        }
         try {
-            (torrent as unknown as WebTorrent.Torrent).destroy();
+            const torrentObj = torrent as unknown as WebTorrent.Torrent;
+            try {
+                client.remove(torrentObj, { destroyStore: true } as any);
+            } catch {}
+            torrentObj.destroy({ destroyStore: true } as any);
         } catch (err) {
             console.error(`[MagnetService] Error destroying torrent: ${err}`);
         }
@@ -72,6 +171,7 @@ export function destroyTorrent(infoHash: string) {
         clearTimeout(timers.get(infoHash)!);
         timers.delete(infoHash);
     }
+    globalForMagnet.torrentLastAccess.delete(infoHash);
 }
 
 export function destroyAllTorrents() {
@@ -79,27 +179,22 @@ export function destroyAllTorrents() {
     if (!client) return;
     const count = client.torrents.length;
     client.torrents.forEach(t => {
-        try { t.destroy(); } catch(e) {}
+        try {
+            try { client.remove(t, { destroyStore: true } as any); } catch {}
+            t.destroy({ destroyStore: true } as any);
+        } catch(e) {}
     });
     globalForMagnet.torrentTimers.forEach(t => clearTimeout(t));
     globalForMagnet.torrentTimers.clear();
-    console.log(`[MagnetService] Destroyed all ${count} torrents`);
+    globalForMagnet.torrentLastAccess.clear();
+    if (DEBUG_TORRENT_LOGS) {
+        console.log(`[MagnetService] Destroyed all ${count} torrents`);
+    }
 }
 
 export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): Promise<WebTorrent.TorrentFile | null> => {
     const client = getMagnetClient();
-    const trackers = [
-        'udp://tracker.opentrackr.org:1337/announce',
-        'udp://tracker.openbittorrent.com:80/announce',
-        'udp://9.rarbg.com:2810/announce',
-        'udp://tracker.kp.muni.cz:80/announce',
-        'udp://www.torrent.eu.org:451/announce',
-        'udp://tracker.tiny-vps.com:6969/announce',
-        'udp://tracker.moeking.me:6969/announce',
-        'https://p4p.arenabg.com:1337/announce',
-        'wss://tracker.openwebtorrent.com',
-    ];
-    const trParams = trackers.map(t => `&tr=${encodeURIComponent(t)}`).join('');
+    const trParams = DEFAULT_TRACKERS.map(t => `&tr=${encodeURIComponent(t)}`).join('');
     const magnetURI = `magnet:?xt=urn:btih:${infoHash}${trParams}`;
 
     // Check if already added
@@ -111,10 +206,13 @@ export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): 
     }
     
     if (!torrent) {
-        console.log(`[MagnetService] Adding torrent: ${infoHash}`);
+        if (DEBUG_TORRENT_LOGS) {
+            console.log(`[MagnetService] Adding torrent: ${infoHash}`);
+        }
+        pruneOtherTorrents(infoHash);
         torrent = client.add(magnetURI, { 
             destroyStoreOnDestroy: true, // Don't fill disk space permanently
-            path: '/tmp/webtorrent' // Store in tmp
+            path: TORRENT_STORAGE_PATH // RAM-backed when /dev/shm is available
         });
     }
 
@@ -152,12 +250,14 @@ export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): 
                 if (retries >= MAX_RETRIES) {
                     throw err; // Give up after retries
                 }
-                console.log(`[MagnetService] Metadata timeout, retry ${retries}/${MAX_RETRIES}`);
+                if (DEBUG_TORRENT_LOGS) {
+                    console.log(`[MagnetService] Metadata timeout, retry ${retries}/${MAX_RETRIES}`);
+                }
                 // Destroy and re-add to reset state
-                try { torrent.destroy(); } catch(e) {}
+                try { torrent.destroy({ destroyStore: true } as any); } catch(e) {}
                 torrent = client.add(magnetURI, { 
                     destroyStoreOnDestroy: true,
-                    path: '/tmp/webtorrent'
+                    path: TORRENT_STORAGE_PATH
                 });
             }
         }
@@ -167,7 +267,11 @@ export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): 
     // If fileIdx is provided, use it. Otherwise find largest file (video)
     let file: WebTorrent.TorrentFile;
     
-    if (fileIdx !== undefined && torrent.files[fileIdx]) {
+    const safeFileIdx = Number.isFinite(fileIdx) ? Number(fileIdx) : -1;
+
+    if (safeFileIdx >= 0 && torrent.files[safeFileIdx]) {
+        file = torrent.files[safeFileIdx];
+    } else if (fileIdx === 0 && torrent.files[0] && torrent.files.length === 1) {
         file = torrent.files[fileIdx];
     } else {
         // Find largest
@@ -181,11 +285,11 @@ export const getFileFromMagnet = async (infoHash: string, fileIdx: number = 0): 
     file.select();
 
     // Log progress/speed for debugging (reduced spam)
-    if (!torrent.listenerCount('download')) {
+    if (DEBUG_TORRENT_LOGS && !torrent.listenerCount('download')) {
         let lastLogTime = 0;
         const onDownload = (bytes: number) => {
              const now = Date.now();
-             if (now - lastLogTime > 10000) { // Log every 10s max
+             if (now - lastLogTime > 30000) {
                 lastLogTime = now;
                 const speed = (client.downloadSpeed / 1024 / 1024).toFixed(2);
                 console.log(`[MagnetService] ${torrent.infoHash.substring(0, 6)}... Speed: ${speed} MB/s | Peers: ${torrent.numPeers} | Progress: ${(torrent.progress * 100).toFixed(1)}%`);

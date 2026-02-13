@@ -28,6 +28,7 @@ export interface StreamSource {
   size?: string;
   filename?: string;
   codec?: string;
+  audioCodec?: string;
   infoHash?: string;
 }
 
@@ -71,6 +72,12 @@ const formatSpeed = (bytes) => {
   if (!bytes || bytes === 0) return '0 KB/s';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB/s';
   return (bytes / 1024 / 1024).toFixed(1) + ' MB/s';
+};
+
+const getInfoHashFromStreamUrl = (url?: string | null) => {
+  if (!url) return null;
+  const match = url.match(/\/api\/stream\/magnet\/([a-fA-F0-9]{40})/);
+  return match ? match[1] : null;
 };
 
 const hasArabicCharacters = (value?: string) => {
@@ -143,16 +150,19 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
   // Server-side torrent stats polling (for /api/stream/magnet streaming)
   const [serverTorrentStats, setServerTorrentStats] = useState<any>(null);
+  const pollInfoHash = useMemo(() => {
+    return currentSource?.infoHash || getInfoHashFromStreamUrl(streamUrl);
+  }, [currentSource?.infoHash, streamUrl]);
   
   useEffect(() => {
-    if (!currentSource?.infoHash || !streamUrl?.includes('/api/stream/magnet/')) {
+    if (!pollInfoHash || !streamUrl?.includes('/api/stream/magnet/')) {
       setServerTorrentStats(null);
       return;
     }
 
     const pollStats = async () => {
       try {
-        const res = await fetch(`/api/stream/stats?infoHash=${currentSource.infoHash}`);
+        const res = await fetch(`/api/stream/stats?infoHash=${pollInfoHash}`);
         if (res.ok) {
           const stats = await res.json();
           setServerTorrentStats(stats);
@@ -167,7 +177,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
     pollStats(); // Immediate first fetch
 
     return () => clearInterval(interval);
-  }, [currentSource?.infoHash, streamUrl]);
+  }, [pollInfoHash, streamUrl]);
 
   useEffect(() => {
     if (torrentError) setError(torrentError);
@@ -226,6 +236,24 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   // Volume slider state for proper drag handling
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const volumeTimeoutRef = useRef(null);
+
+  // Keep media element audio state in sync when switching sources (TopCinema <-> Torrent)
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    video.muted = muted;
+
+    if (!muted) {
+      const nextVolume = volume > 0 ? volume : 1;
+      if (video.volume === 0 || Math.abs(video.volume - nextVolume) > 0.01) {
+        video.volume = nextVolume;
+      }
+      if (volume <= 0) {
+        setVolume(nextVolume);
+      }
+    }
+  }, [muted, volume, streamUrl, currentSource?.id]);
 
   // --- INIT ---
 
@@ -345,11 +373,11 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
             label: s.label || s.lang,
             lang: s.lang || 'unknown',
             source: 'OpenSubtitles',
-            src: `/api/proxy/subtitles?url=${encodeURIComponent(s.url)}`
+            src: `/api/proxy/subtitles?url=${encodeURIComponent(s.url)}&v=2`
           }));
           setSubtitles(mapped);
           // Auto-select Arabic if available, else English
-          const araIdx = mapped.findIndex((s: any) => s.label.toLowerCase().includes('arabic') || s.lang === 'ara');
+          const araIdx = mapped.findIndex((s: any) => s.label.toLowerCase().includes('arabic') || s.lang === 'ara' || s.lang === 'ar');
           const enIdx = mapped.findIndex((s: any) => s.label.toLowerCase().includes('english') || s.lang === 'eng');
           
           if (araIdx !== -1) setCurrentSubtitle(araIdx);
@@ -563,11 +591,27 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
         case 'ArrowRight': case 'KeyL': e.preventDefault(); seekRelative(10); break;
         case 'ArrowUp': 
           e.preventDefault(); 
-          setVolume(v => { const n = Math.min(v + 0.1, 1); if(videoRef.current) videoRef.current.volume = n; return n; }); 
+          setVolume(v => {
+            const n = Math.min(v + 0.1, 1);
+            if (videoRef.current) {
+              videoRef.current.volume = n;
+              videoRef.current.muted = false;
+            }
+            setMuted(false);
+            return n;
+          }); 
           break;
         case 'ArrowDown': 
           e.preventDefault(); 
-          setVolume(v => { const n = Math.max(v - 0.1, 0); if(videoRef.current) videoRef.current.volume = n; return n; }); 
+          setVolume(v => {
+            const n = Math.max(v - 0.1, 0);
+            if (videoRef.current) {
+              videoRef.current.volume = n;
+              videoRef.current.muted = n === 0;
+            }
+            setMuted(n === 0);
+            return n;
+          }); 
           break;
         case 'KeyF': e.preventDefault(); toggleFullscreen(); break;
         case 'KeyM': e.preventDefault(); toggleMute(); break;
@@ -589,6 +633,28 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
   const isP2P = useMemo(() => {
       return (currentSource?.type === 'p2p') || (streamUrl && streamUrl.startsWith('magnet:'));
   }, [currentSource, streamUrl]);
+
+  const torrentInfoLine = useMemo(() => {
+    if (serverTorrentStats) {
+      return `${serverTorrentStats.numPeers} peers • ${formatSpeed(serverTorrentStats.downloadSpeed)} • ${(serverTorrentStats.progress * 100).toFixed(0)}%`;
+    }
+
+    const livePeers = peers || 0;
+    const liveProgress = (torrentProgress * 100).toFixed(0);
+
+    if (livePeers > 0 || downloadSpeed > 0 || torrentProgress > 0) {
+      return `${livePeers} peers • ${formatSpeed(downloadSpeed)} • ${liveProgress}%`;
+    }
+
+    const sourceSeeds = currentSource?.seeds || 0;
+    const sourceSize = currentSource?.size ? ` • ${currentSource.size}` : '';
+
+    if (sourceSeeds > 0) {
+      return `${sourceSeeds} seeds${sourceSize}`;
+    }
+
+    return currentSource?.info || 'Waiting for torrent stats';
+  }, [serverTorrentStats, peers, downloadSpeed, torrentProgress, currentSource]);
 
   // Volume icon
   const VolumeIcon = useMemo(() => {
@@ -737,7 +803,18 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
              setError(`Playback failed for ${currentSource?.name || 'source'}`);
           }}
           onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
-          onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
+          onLoadedMetadata={() => {
+            const video = videoRef.current;
+            setDuration(video?.duration || 0);
+            if (!video) return;
+
+            video.muted = muted;
+            if (!muted && video.volume === 0) {
+              const nextVolume = volume > 0 ? volume : 1;
+              video.volume = nextVolume;
+              if (volume <= 0) setVolume(nextVolume);
+            }
+          }}
           onWaiting={() => setWaiting(true)}
           onPlaying={() => { setWaiting(false); setPlaying(true); setIsPaused(false); }}
           onPause={() => setPlaying(false)}
@@ -881,15 +958,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                        <div className="flex items-center gap-2">
                            <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded font-bold tracking-wider shrink-0">P2P</span>
                            <span className="text-[10px] text-white/50 font-mono tracking-wide">
-                               {serverTorrentStats ? (
-                                   <>
-                                       {serverTorrentStats.numPeers} peers • {formatSpeed(serverTorrentStats.downloadSpeed)} • {(serverTorrentStats.progress * 100).toFixed(0)}%
-                                   </>
-                               ) : (
-                                   <>
-                                       {peers} peers • {formatSpeed(downloadSpeed)} • {(torrentProgress * 100).toFixed(0)}%
-                                   </>
-                               )}
+                               {torrentInfoLine}
                            </span>
                        </div>
                     )}

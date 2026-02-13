@@ -11,6 +11,18 @@ export interface Subtitle {
     label?: string; // Generated
 }
 
+function normalizeLanguageCode(code?: string | null): string {
+    const value = (code || '').trim().toLowerCase();
+    const aliases: Record<string, string> = {
+        ar: 'ara',
+        arabic: 'ara',
+        arb: 'ara',
+        eng: 'eng',
+        en: 'eng'
+    };
+    return aliases[value] || value || 'unknown';
+}
+
 export async function getOpenSubtitles(imdbId: string, season?: number, episode?: number): Promise<Subtitle[]> {
     try {
         const type = season && episode ? 'series' : 'movie';
@@ -30,11 +42,12 @@ export async function getOpenSubtitles(imdbId: string, season?: number, episode?
         return data.subtitles.map(sub => {
              // Stremio returns lang codes like 'eng', 'pob', 'spa'
              // Convert to readable label if possible, or just use code
+             const normalizedLang = normalizeLanguageCode(sub.lang);
              return {
                  id: sub.id,
                  url: sub.url,
-                 lang: sub.lang,
-                 label: getLanguageName(sub.lang)
+                 lang: normalizedLang,
+                 label: getLanguageName(normalizedLang)
              };
         });
 
@@ -57,6 +70,7 @@ function getLanguageName(code: string): string {
         'jpn': 'Japanese',
         'chi': 'Chinese',
         'ara': 'Arabic',
+        'ar': 'Arabic',
         'hin': 'Hindi',
         'kor': 'Korean',
         'tur': 'Turkish',

@@ -2,7 +2,18 @@
 // This avoids CORs issues and allows caching/processing
 import { NextRequest, NextResponse } from 'next/server';
 import { getOpenSubtitles } from '@/lib/subtitle-service';
-import { gotScraping } from 'got-scraping';
+
+function isArabicLang(lang?: string, label?: string): boolean {
+    const l = (lang || '').toLowerCase();
+    const t = (label || '').toLowerCase();
+    return l === 'ara' || l === 'ar' || t.includes('arabic') || t.includes('عرب');
+}
+
+function isEnglishLang(lang?: string, label?: string): boolean {
+    const l = (lang || '').toLowerCase();
+    const t = (label || '').toLowerCase();
+    return l === 'eng' || l === 'en' || t.includes('english');
+}
 
 export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
@@ -23,10 +34,16 @@ export async function GET(request: NextRequest) {
 
         // Sort: Arabic first, then English, then others
         subs.sort((a, b) => {
-            if (a.lang === 'ara' && b.lang !== 'ara') return -1;
-            if (a.lang !== 'ara' && b.lang === 'ara') return 1;
-            if (a.lang === 'eng' && b.lang !== 'eng') return -1;
-            if (a.lang !== 'eng' && b.lang === 'eng') return 1;
+            const aAr = isArabicLang(a.lang, a.label);
+            const bAr = isArabicLang(b.lang, b.label);
+            if (aAr && !bAr) return -1;
+            if (!aAr && bAr) return 1;
+
+            const aEn = isEnglishLang(a.lang, a.label);
+            const bEn = isEnglishLang(b.lang, b.label);
+            if (aEn && !bEn) return -1;
+            if (!aEn && bEn) return 1;
+
             return 0;
         });
 
@@ -34,8 +51,9 @@ export async function GET(request: NextRequest) {
         // This dramatically reduces 429 errors from the proxy
         const seen = new Map<string, typeof subs>();
         for (const sub of subs) {
-            if (!seen.has(sub.lang)) seen.set(sub.lang, []);
-            seen.get(sub.lang)!.push(sub);
+            const key = (sub.lang || 'unknown').toLowerCase();
+            if (!seen.has(key)) seen.set(key, []);
+            seen.get(key)!.push(sub);
         }
         
         // Take top 2 per language to give variety without spam
