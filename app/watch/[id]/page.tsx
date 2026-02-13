@@ -636,7 +636,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
   const torrentInfoLine = useMemo(() => {
     if (serverTorrentStats) {
-      return `${serverTorrentStats.numPeers} peers • ${formatSpeed(serverTorrentStats.downloadSpeed)} • ${(serverTorrentStats.progress * 100).toFixed(0)}%`;
+      return `Peers ${serverTorrentStats.numPeers} • Server ${formatSpeed(serverTorrentStats.downloadSpeed)} • Client ${formatSpeed(serverTorrentStats.deliveredSpeed || 0)} • ${(serverTorrentStats.progress * 100).toFixed(0)}%`;
     }
 
     const livePeers = peers || 0;
@@ -1137,7 +1137,7 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
 
                        {showSourceSelector && (
                            <div 
-                             className="absolute bottom-full right-0 mb-3 w-72 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50 flex flex-col max-h-[22rem]" 
+                             className="absolute bottom-full right-0 mb-3 w-[30rem] max-w-[90vw] bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50 flex flex-col max-h-[24rem]" 
                              onClick={e => e.stopPropagation()}
                            >
                                 <div className="p-3 border-b border-white/10 bg-white/5 flex items-center gap-2">
@@ -1163,13 +1163,14 @@ export default function WatchPage({ params }: { params: Promise<{ id: string }> 
                                               {currentSource?.id === s.id && <Check size={11} className="text-emerald-400 ml-auto shrink-0" />}
                                             </div>
                                             {s.filename ? (
-                                              <span className="text-[10px] text-white/70 truncate leading-tight">{s.filename}</span>
+                                              <span className="text-[11px] text-white/75 leading-snug break-words line-clamp-2">{s.filename}</span>
                                             ) : (
-                                              <span className="text-[10px] text-white/50 truncate leading-tight">{s.name}</span>
+                                              <span className="text-[11px] text-white/55 leading-snug break-words line-clamp-2">{s.name}</span>
                                             )}
                                             <div className="flex items-center gap-3 text-[9px] text-white/30">
                                               {s.seeds != null && <span className="flex items-center gap-0.5"><Users size={9} /> {s.seeds}</span>}
                                               {s.size && <span className="flex items-center gap-0.5"><HardDrive size={9} /> {s.size}</span>}
+                                              {s.audioCodec && <span className="text-[9px] text-emerald-300/80">{s.audioCodec}</span>}
                                               {s.info && <span className="truncate">{s.info}</span>}
                                             </div>
                                         </button>

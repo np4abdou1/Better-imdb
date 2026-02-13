@@ -95,6 +95,7 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
 
       const hasAAC = /\baac\b|\baac2\.0\b|\baac 2\.0\b/i.test(combinedText);
       const hasOpus = /\bopus\b/i.test(combinedText);
+      const hasMultiChannelAudio = /\b5\.1\b|\b7\.1\b|\batmos\b/i.test(combinedText);
       const hasEAC3 = /\beac3\b|\bddp\b|\bdd\+\b|dolby\s*digital\s*plus/i.test(combinedText);
       const hasAC3 = /\bac3\b(?!\+)/i.test(combinedText);
       const hasDTS = /\bdts\b|\bdtshd\b/i.test(combinedText);
@@ -137,6 +138,7 @@ export async function getTorrentioStreams(imdbId: string, type: 'movie' | 'serie
       if (hasAAC || hasOpus) score += 2500; // Strongly prefer browser-friendly audio
       if (hasEAC3 || hasDTS || hasTrueHD) score -= 7000; // Common "video plays but no audio" sources
       if (hasAC3) score -= 1500;
+      if (hasMultiChannelAudio && !hasAAC && !hasOpus) score -= 2200;
 
       return {
         id: `torrentio-${stream.infoHash}-${fileIdx}-${index}`,

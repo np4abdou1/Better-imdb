@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { gotScraping } from 'got-scraping';
 import { Readable } from 'stream';
 
+const DEBUG_STREAM_PROXY = process.env.DEBUG_STREAM_PROXY === '1';
+
 export async function GET(request: Request, props: { params: Promise<{ id: string }> }): Promise<Response> {
   const params = await props.params;
   const { id } = params; // IMDb ID
@@ -44,9 +46,14 @@ export async function GET(request: Request, props: { params: Promise<{ id: strin
         // Disable HTTP2 as it causes timeouts with some video CDNs
         http2: false,
         timeout: {
-            request: 20000 // 20s timeout
+            request: 180000, // 3m to avoid long-range timeout mid playback on VPS
+            response: 45000
         }
     });
+
+    request.signal.addEventListener('abort', () => {
+        try { (proxyStream as any).destroy(); } catch {}
+    }, { once: true });
 
     return new Promise<Response>((resolve) => {
         proxyStream.on('response', (response) => {
@@ -89,7 +96,23 @@ export async function GET(request: Request, props: { params: Promise<{ id: strin
             }));
         });
 
-        proxyStream.on('error', (err) => {
+        proxyStream.on('error', (err: any) => {
+            const code = err?.code || err?.cause?.code;
+            const aborted = request.signal.aborted || code === 'ERR_STREAM_PREMATURE_CLOSE' || code === 'ERR_GOT_REQUEST_ERROR';
+
+            if (aborted) {
+                if (DEBUG_STREAM_PROXY) {
+                    console.warn('[StreamProxy] Upstream aborted/closed by client switch');
+                }
+                resolve(new NextResponse(null, { status: 499 }));
+                return;
+            }
+
+            if (code === 'ETIMEDOUT') {
+                resolve(new NextResponse('Upstream timeout', { status: 504 }));
+                return;
+            }
+
             console.error('Stream proxy error:', err);
             resolve(new NextResponse('Upstream Error', { status: 502 }));
         });

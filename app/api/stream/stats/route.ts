@@ -1,4 +1,4 @@
-import { getMagnetClient } from '@/lib/magnet-service';
+import { getMagnetClient, getTorrentDeliveryStats } from '@/lib/magnet-service';
 import { NextResponse } from 'next/server';
 
 export async function GET(request: Request) {
@@ -26,6 +26,8 @@ export async function GET(request: Request) {
             }), { status: 404 });
         }
 
+        const delivery = getTorrentDeliveryStats(infoHash);
+
         return new NextResponse(JSON.stringify({
             infoHash: torrent.infoHash || infoHash,
             name: torrent.name || 'Unknown',
@@ -37,6 +39,8 @@ export async function GET(request: Request) {
             selected: torrent.selected || false,
             length: torrent.length || 0,
             downloaded: torrent.downloaded || 0,
+            deliveredSpeed: delivery?.bytesPerSec || 0,
+            deliveredUpdatedAt: delivery?.updatedAt || null,
             paused: torrent.paused || false,
             metadata: !!torrent.metadata,
             files: (torrent.files || []).map((f: any, i: number) => ({

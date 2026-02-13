@@ -1,4 +1,4 @@
-import { getFileFromMagnet, prioritizeTorrentRange } from '@/lib/magnet-service';
+import { getFileFromMagnet, prioritizeTorrentRange, recordTorrentDelivery } from '@/lib/magnet-service';
 import { NextResponse } from 'next/server';
 import { decodeSubtitleBuffer } from '@/lib/subtitle-text';
 import { convertSubtitles } from '@/lib/srt-converter';
@@ -79,6 +79,7 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
             await prioritizeTorrentRange(infoHash, start, end);
 
             const stream = file.createReadStream({ start, end, highWaterMark: 256 * 1024 } as any); 
+            const requestStart = Date.now();
 
             const abortHandler = () => {
                 try { (stream as any).destroy(); } catch (e) {}
@@ -102,6 +103,8 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
                          }
                     });
                     stream.on('end', () => {
+                        const elapsed = Date.now() - requestStart;
+                        recordTorrentDelivery(infoHash, chunksize, elapsed);
                         request.signal.removeEventListener('abort', abortHandler);
                         try { controller.close(); } catch(e) {}
                     });

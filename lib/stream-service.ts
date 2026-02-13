@@ -4,6 +4,8 @@ import { StreamMapping } from '@/types';
 import { topCinemaScraper } from './topcinema-scraper';
 import { vidTubeProcessor } from './vidtube-processor';
 
+const DEBUG_STREAM_LOGS = process.env.DEBUG_STREAM_LOGS === '1';
+
 /**
  * Ensure URL is properly encoded for safe HTTP transmission
  * Note: got-scraping expects URLs in their raw Unicode form
@@ -123,7 +125,7 @@ const searchContent = async (query: string, type?: 'movie' | 'series' | 'anime',
     return await topCinemaScraper.search(query, type);
   } catch (error: any) {
     if (logFn) logFn(`[TopCinema] Search error: ${error.message}`);
-    console.error(`[TopCinema] Search error:`, error.message);
+    if (DEBUG_STREAM_LOGS) console.error(`[TopCinema] Search error:`, error.message);
     return [];
   }
 };
@@ -133,7 +135,7 @@ const getShowDetails = async (url: string, logFn?: (msg: string) => void): Promi
     return await topCinemaScraper.getShowDetails(url);
   } catch (error: any) {
     if (logFn) logFn(`[TopCinema] Show details error: ${error.message}`);
-    console.error(`[TopCinema] Show details error:`, error.message);
+    if (DEBUG_STREAM_LOGS) console.error(`[TopCinema] Show details error:`, error.message);
     return null;
   }
 };
@@ -159,7 +161,7 @@ const getSeasonEpisodes = async (url: string, logFn?: (msg: string) => void): Pr
     return episodes;
   } catch (error: any) {
     if (logFn) logFn(`[TopCinema] Season episodes error: ${error.message}`);
-    console.error(`[TopCinema] Season episodes error:`, error.message);
+    if (DEBUG_STREAM_LOGS) console.error(`[TopCinema] Season episodes error:`, error.message);
     return [];
   }
 };
@@ -206,7 +208,7 @@ const resolveStream = async (url: string, logFn?: (msg: string) => void): Promis
     };
   } catch (error: any) {
     if (logFn) logFn(`[TopCinema] Stream resolve error: ${error.message}`);
-    console.error(`[TopCinema] Stream resolve error:`, error.message);
+    if (DEBUG_STREAM_LOGS) console.error(`[TopCinema] Stream resolve error:`, error.message);
     return null;
   }
 };
@@ -229,7 +231,7 @@ export interface StreamParams {
 export const getStreamForTitle = async ({ imdbId, title, originalTitle, japaneseTitle, year, type, isAnime, season = 1, episode = 1, onLog = null }: StreamParams) => {
   const log = (message: string) => {
     if (onLog) onLog(message);
-    console.log(message);
+    if (DEBUG_STREAM_LOGS) console.log(message);
   };
 
   log(`[StreamService] Resolving: ${title} (${year}) S${season}E${episode}`);
@@ -644,7 +646,7 @@ const getTitleInfo = async (imdbId: string): Promise<any> => {
 export const resolveStreamForImdbId = async (imdbId: string, season: number = 1, episode: number = 1, onLog: ((msg: string) => void) | null = null) => {
   const log = (message: string) => {
     if (onLog) onLog(message);
-    console.log(message);
+    if (DEBUG_STREAM_LOGS) console.log(message);
   };
     const info = await getTitleInfo(imdbId);
     if (!info) {

@@ -7,6 +7,7 @@ const globalForMagnet = global as unknown as {
     magnetClient: WebTorrent.Instance;
     torrentTimers: Map<string, NodeJS.Timeout>;
     torrentLastAccess: Map<string, number>;
+    torrentDeliveryStats: Map<string, { bytesPerSec: number; updatedAt: number; lastChunkBytes: number }>;
 };
 
 // Idle timeout: destroy torrents that haven't been accessed in 2 minutes
@@ -39,6 +40,10 @@ if (!globalForMagnet.torrentLastAccess) {
     globalForMagnet.torrentLastAccess = new Map();
 }
 
+if (!globalForMagnet.torrentDeliveryStats) {
+    globalForMagnet.torrentDeliveryStats = new Map();
+}
+
 if (!existsSync(TORRENT_STORAGE_PATH)) {
     try {
         mkdirSync(TORRENT_STORAGE_PATH, { recursive: true });
@@ -47,6 +52,28 @@ if (!existsSync(TORRENT_STORAGE_PATH)) {
 
 function markTorrentAccess(infoHash: string) {
     globalForMagnet.torrentLastAccess.set(infoHash, Date.now());
+}
+
+export function recordTorrentDelivery(infoHash: string, bytes: number, durationMs: number) {
+    if (!infoHash || bytes <= 0 || durationMs <= 0) return;
+    const bytesPerSec = Math.round((bytes / durationMs) * 1000);
+
+    globalForMagnet.torrentDeliveryStats.set(infoHash, {
+        bytesPerSec,
+        updatedAt: Date.now(),
+        lastChunkBytes: bytes,
+    });
+}
+
+export function getTorrentDeliveryStats(infoHash: string) {
+    const stats = globalForMagnet.torrentDeliveryStats.get(infoHash);
+    if (!stats) return null;
+
+    if (Date.now() - stats.updatedAt > 15000) {
+        return { ...stats, bytesPerSec: 0 };
+    }
+
+    return stats;
 }
 
 function pruneOtherTorrents(currentInfoHash: string) {
@@ -91,6 +118,7 @@ function resetIdleTimer(infoHash: string) {
         }
         timers.delete(infoHash);
         globalForMagnet.torrentLastAccess.delete(infoHash);
+        globalForMagnet.torrentDeliveryStats.delete(infoHash);
     }, TORRENT_IDLE_MS));
 }
 
@@ -172,6 +200,7 @@ export function destroyTorrent(infoHash: string) {
         timers.delete(infoHash);
     }
     globalForMagnet.torrentLastAccess.delete(infoHash);
+    globalForMagnet.torrentDeliveryStats.delete(infoHash);
 }
 
 export function destroyAllTorrents() {
@@ -187,6 +216,7 @@ export function destroyAllTorrents() {
     globalForMagnet.torrentTimers.forEach(t => clearTimeout(t));
     globalForMagnet.torrentTimers.clear();
     globalForMagnet.torrentLastAccess.clear();
+    globalForMagnet.torrentDeliveryStats.clear();
     if (DEBUG_TORRENT_LOGS) {
         console.log(`[MagnetService] Destroyed all ${count} torrents`);
     }
