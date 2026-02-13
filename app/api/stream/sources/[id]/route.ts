@@ -39,10 +39,19 @@ export async function GET(request: Request, props: { params: Promise<{ id: strin
           return false;
         };
 
+        const isDualAudio = (source: StreamSource) => {
+          const mode = (source.audioMode || '').toLowerCase();
+          if (mode.includes('dual') || mode.includes('multi')) return true;
+          const text = `${source.filename || ''} ${source.info || ''}`.toLowerCase();
+          return /dual[-\s]?audio|multi[-\s]?audio|multiple\s+audio/.test(text);
+        };
+
         const MAX_TORRENT_SOURCES = 10;
         const MIN_COMPATIBLE = 3;
+        const MIN_DUAL_COMPATIBLE = 2;
 
         const compatible = torrentioSources.filter(isCompatibleAudio);
+        const dualCompatible = torrentioSources.filter((s) => isCompatibleAudio(s) && isDualAudio(s));
         const baseTop = torrentioSources.slice(0, MAX_TORRENT_SOURCES);
 
         const selected = [...baseTop];
@@ -56,6 +65,20 @@ export async function GET(request: Request, props: { params: Promise<{ id: strin
             selectedIds.add(candidate.id);
             compatibleCount++;
             if (compatibleCount >= MIN_COMPATIBLE) break;
+          }
+        }
+
+        const hasAnyDual = torrentioSources.some(isDualAudio);
+        if (hasAnyDual) {
+          let dualCompatibleCount = selected.filter((s) => isCompatibleAudio(s) && isDualAudio(s)).length;
+          if (dualCompatibleCount < MIN_DUAL_COMPATIBLE) {
+            for (const candidate of dualCompatible) {
+              if (selectedIds.has(candidate.id)) continue;
+              selected.push(candidate);
+              selectedIds.add(candidate.id);
+              dualCompatibleCount++;
+              if (dualCompatibleCount >= MIN_DUAL_COMPATIBLE) break;
+            }
           }
         }
 
