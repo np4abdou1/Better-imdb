@@ -1,5 +1,10 @@
-import { getFileFromMagnet } from '@/lib/magnet-service';
+import { getFileFromMagnet, prioritizeTorrentRange } from '@/lib/magnet-service';
 import { NextResponse } from 'next/server';
+import { decodeSubtitleBuffer } from '@/lib/subtitle-text';
+import { convertSubtitles } from '@/lib/srt-converter';
+
+const MAX_RANGE_CHUNK_BYTES = 2 * 1024 * 1024; // 2MB per response chunk
+const DEBUG_STREAM_LOGS = process.env.DEBUG_STREAM_LOGS === '1';
 
 export async function GET(request: Request, props: { params: Promise<{ infoHash: string }> }) {
     const params = await props.params;
@@ -36,16 +41,13 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
                  s.on('end', () => resolve(Buffer.concat(chunks)));
                  s.on('error', reject);
              });
-             
-             const rawSrt = buffer.toString('utf-8');
-             // Simple SRT to VTT conversion
-             // 1. Add header
-             // 2. Convert , to . in timestamps
-             const vttContent = "WEBVTT\n\n" + rawSrt.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+
+             const rawSrt = decodeSubtitleBuffer(buffer, 'text/plain');
+             const vttContent = convertSubtitles(rawSrt);
 
              return new NextResponse(vttContent, {
                  headers: {
-                     'Content-Type': 'text/vtt',
+                     'Content-Type': 'text/vtt; charset=utf-8',
                      'Cache-Control': 'public, max-age=3600'
                  }
              });
@@ -55,12 +57,33 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
         if (rangeHeader) {
             const parts = rangeHeader.replace(/bytes=/, "").split("-");
             const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            const requestedEnd = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+            if (Number.isNaN(start) || start >= fileSize) {
+                return new NextResponse('Requested range not satisfiable', {
+                    status: 416,
+                    headers: {
+                        'Content-Range': `bytes */${fileSize}`
+                    }
+                });
+            }
+
+            const boundedEnd = Math.min(requestedEnd, fileSize - 1);
+            const end = Math.min(start + MAX_RANGE_CHUNK_BYTES - 1, boundedEnd);
             const chunksize = (end - start) + 1;
 
-            console.log(`[StreamAPI] Range Request: ${start}-${end} (${chunksize} bytes) for ${fileName}`);
+            if (DEBUG_STREAM_LOGS) {
+                console.log(`[StreamAPI] Range Request: ${start}-${end} (${chunksize} bytes) for ${fileName}`);
+            }
 
-            const stream = file.createReadStream({ start, end }); 
+            await prioritizeTorrentRange(infoHash, start, end);
+
+            const stream = file.createReadStream({ start, end, highWaterMark: 256 * 1024 } as any); 
+
+            const abortHandler = () => {
+                try { (stream as any).destroy(); } catch (e) {}
+            };
+            request.signal.addEventListener('abort', abortHandler, { once: true });
 
 
             // Create Web Stream for Response with Backpressure Handling
@@ -79,9 +102,11 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
                          }
                     });
                     stream.on('end', () => {
+                        request.signal.removeEventListener('abort', abortHandler);
                         try { controller.close(); } catch(e) {}
                     });
                     stream.on('error', err => {
+                        request.signal.removeEventListener('abort', abortHandler);
                         try { controller.error(err); } catch(e) {}
                     });
                 },
@@ -90,6 +115,7 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
                 },
                 cancel() {
                     (stream as any).destroy();
+                    request.signal.removeEventListener('abort', abortHandler);
                 }
             });
 
@@ -103,7 +129,8 @@ export async function GET(request: Request, props: { params: Promise<{ infoHash:
                     // Disable cache control to force fresh requests for ranges
                     'Cache-Control': 'no-cache, no-store, must-revalidate',
                     'Pragma': 'no-cache',
-                    'Expires': '0'
+                    'Expires': '0',
+                    'Connection': 'keep-alive'
                 },
             });
 

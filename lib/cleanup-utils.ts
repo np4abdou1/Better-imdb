@@ -5,6 +5,9 @@
  * Used by both WatchPage and NetflixStylePlayer components.
  */
 
+const recentCleanup = new Map<string, number>();
+const CLEANUP_DEDUPE_MS = 1000;
+
 /**
  * Extract infoHash from various URL formats
  * 
@@ -37,6 +40,13 @@ export function extractInfoHash(url: string | null): string | null {
 export async function cleanupTorrent(url: string | null): Promise<void> {
   const infoHash = extractInfoHash(url);
   if (!infoHash) return;
+
+  const now = Date.now();
+  const previous = recentCleanup.get(infoHash);
+  if (previous && now - previous < CLEANUP_DEDUPE_MS) {
+    return;
+  }
+  recentCleanup.set(infoHash, now);
   
   console.log('[Cleanup] Destroying torrent:', infoHash.substring(0, 8) + '...');
   
@@ -49,12 +59,20 @@ export async function cleanupTorrent(url: string | null): Promise<void> {
       keepalive: true // Ensures request completes even if page unloads
     });
   } catch (e) {
+    recentCleanup.delete(infoHash);
     // Fallback to sendBeacon for page unload
     // Use Blob with proper MIME type for correct Content-Type handling
-    const blob = new Blob([JSON.stringify({ infoHash })], { 
-      type: 'application/json' 
-    });
-    navigator.sendBeacon('/api/stream/cleanup', blob);
+    try {
+      const blob = new Blob([JSON.stringify({ infoHash })], {
+        type: 'application/json'
+      });
+      navigator.sendBeacon('/api/stream/cleanup', blob);
+    } catch {
+      fetch(`/api/stream/cleanup?infoHash=${infoHash}`, {
+        method: 'GET',
+        keepalive: true
+      }).catch(() => {});
+    }
   }
 }
 
@@ -66,10 +84,24 @@ export async function cleanupTorrent(url: string | null): Promise<void> {
 export function handleBeforeUnload(streamUrl: string | null): void {
   const infoHash = extractInfoHash(streamUrl);
   if (!infoHash) return;
+
+  const now = Date.now();
+  const previous = recentCleanup.get(infoHash);
+  if (previous && now - previous < CLEANUP_DEDUPE_MS) {
+    return;
+  }
+  recentCleanup.set(infoHash, now);
   
   // Use sendBeacon with Blob for proper Content-Type (most reliable in this context)
-  const blob = new Blob([JSON.stringify({ infoHash })], { 
-    type: 'application/json' 
-  });
-  navigator.sendBeacon('/api/stream/cleanup', blob);
+  try {
+    const blob = new Blob([JSON.stringify({ infoHash })], {
+      type: 'application/json'
+    });
+    navigator.sendBeacon('/api/stream/cleanup', blob);
+  } catch {
+    fetch(`/api/stream/cleanup?infoHash=${infoHash}`, {
+      method: 'GET',
+      keepalive: true
+    }).catch(() => {});
+  }
 }
